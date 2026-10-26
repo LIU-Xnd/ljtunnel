@@ -113,9 +113,14 @@ def test_config():
                       "(Windows needs it)",
                       "UsePrivilegeSeparation no" in text)
             else:
+                # The check is for the OPTION, not the word: the
+                # template mentions it in a comment, because the
+                # comment is where the reason it is Windows-only
+                # lives. A grep for the word would fail on the
+                # comment.
                 check("the config does not use the deprecated "
                       "privilege separation",
-                      "UsePrivilegeSeparation" not in text)
+                      "UsePrivilegeSeparation no" not in text)
 
             # the dialer end: no gateway, no forwarding
             p2 = sshd.write_config(10001, "127.0.0.1")
@@ -434,11 +439,39 @@ def test_address():
 # ---------------------------------------------------------------- version
 
 def test_version():
-    check("the version is there", bool(__version__), __version__)
     import re
+
+    check("the version is there", bool(__version__), __version__)
     check("the version looks like a version",
           re.match(r"^\d+\.\d+\.\d+$", __version__) is not None,
           __version__)
+
+    # The three places the version lives have to agree: the file, the
+    # fallback constant, and the installed metadata. A freshly tagged
+    # release that reports the old number in its own install test is
+    # the failure this catches.
+    root = pathlib.Path(__file__).resolve().parent.parent
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject.read_text(
+            encoding="utf-8"), re.M)
+        check("the pyproject has a version", m is not None)
+        if m:
+            check("the pyproject and the package agree",
+                  m.group(1) == __version__,
+                  f"pyproject {m.group(1)}, package {__version__}")
+
+    try:
+        from importlib.metadata import version as _dist_version
+        installed = _dist_version("ljtunnel")
+        check("the installed metadata agrees",
+              installed == __version__,
+              f"installed {installed}, package {__version__}")
+    except Exception:
+        # Not installed: the source tree is being tested, which is
+        # fine. The installed copy is tested by the install check.
+        check("the installed metadata is not here (skipped)", True)
 
 
 # ---------------------------------------------------------------- the app
