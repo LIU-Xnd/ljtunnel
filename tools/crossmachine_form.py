@@ -356,11 +356,30 @@ def main():
                  "pkill -f 'ljtunnel dialer' 2>/dev/null; sleep 2; "
                  "echo '  the far sshd and the dialer are gone'",
                  timeout=120))
+
+    # THE SESSION IS A CHILD, AND IT IS TOLD TO GO.
+    #
+    # The far side's dialer is gone, so the session on THIS side is
+    # told to go -- and "told to go" is not "gone".  It can still be
+    # there for a moment afterwards, and it HOLDS THE FORWARDED
+    # PORT the whole time.
+    #
+    # So the far side goes first, the session is given a moment, and
+    # then it is stopped if it did not go on its own.  A test that
+    # leaves a tunnel running is a test that holds a port, and the
+    # next run finds it busy.
     a._on_close()
+    time.sleep(4)
+    left = sshd.stop_sessions()
+    if left:
+        print(f"  {left} session(s) were still there, and they are gone")
     time.sleep(2)
+
     # and this end's own sshd, which the window's close stopped
     print("  the reachable end's port is free:",
           not L.port_in_use(LISTEN_PORT))
+    print("  and the forwarded port is free:",
+          not L.port_in_use(FWD_PORT))
     L.remove_key(detect._fingerprint_of(fake_key))
     records.remove("thebox")
     c.close()
