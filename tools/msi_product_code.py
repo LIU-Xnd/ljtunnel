@@ -41,6 +41,35 @@ comes out malformed and Windows Installer refuses it.
 The namespace is a fixed one, so the derivation does not change
 between builds of this tool.  A DIFFERENT namespace would give
 different codes for the same version, which is the bug being fixed.
+
+AND THE PACKAGECODE IS NOT FIXED, AND THAT IS CORRECT.
+
+The PackageCode is the MSI's own identity -- "this file is this
+package" -- and Windows Installer's own documentation says it
+SHOULD change on every build.  Changing it is what makes an update
+an update instead of a reconfiguration.
+
+So a rebuild of the same version produces a different PackageCode,
+and installing that over the copy that is already there says:
+
+    Product registered: entering maintenance mode
+    Note: 1: 1729
+    Note: 1: 1638
+
+MEASURED: that is what the install said, and it is not a defect to
+be fixed -- it is Windows Installer saying "this is an update, not a
+reconfiguration".
+
+THE WAY THROUGH IS A VERSION, not a rebuild.  A release gets a new
+version number, the version is part of the ProductCode's name, and
+so the ProductCode is new too -- and the install is an UPGRADE,
+which is what it should be.  Installing the SAME version over itself
+is a reconfiguration, and Windows Installer wants a repair for that:
+
+    msiexec /i <the msi> REINSTALL=ALL REINSTALLMODE=vomus
+
+So: the ProductCode is derived from the version, and the version is
+what makes a new package a new package.
 """
 from __future__ import annotations
 
@@ -56,16 +85,22 @@ from pathlib import Path
 NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 
 
-def derive_product_code(upgrade_code: str, version: str) -> str:
-    """The ProductCode for this upgrade code and this version."""
+
+def _name_for(upgrade_code: str, version: str) -> str:
+    """The name both codes are derived from."""
     upgrade_code = upgrade_code.strip().strip("{}")
     # the version is padded to four numbers, because "0.5" and
     # "0.5.0" are the same version and must give the same code
     nums = version.strip().split(".")
     while len(nums) < 4:
         nums.append("0")
-    name = upgrade_code + "." + ".".join(nums)
-    return "{" + str(uuid.uuid5(NAMESPACE, name)).upper() + "}"
+    return upgrade_code + "." + ".".join(nums)
+
+
+def derive_product_code(upgrade_code: str, version: str) -> str:
+    """The ProductCode for this upgrade code and this version."""
+    return "{" + str(uuid.uuid5(NAMESPACE,
+                                 _name_for(upgrade_code, version))).upper() + "}"
 
 
 def set_product_code(wxs: Path) -> bool:

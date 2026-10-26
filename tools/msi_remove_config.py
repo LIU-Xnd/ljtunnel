@@ -313,6 +313,60 @@ UI_SEQUENCE_FRAGMENT = """  <!-- THE QUESTION IS ASKED, AND THEN THE ANSWER IS C
 
 
 
+def _insert_after(text: str, marker: str, fragment: str) -> str:
+    """Put the fragment in after the line the marker names."""
+    at = text.find(marker)
+    if at < 0:
+        return text
+    at = text.find("\n", at)
+    if at < 0:
+        return text
+    return text[:at + 1] + fragment + text[at + 1:]
+
+
+def _marker_for_standard_directory(text: str, name: str) -> str:
+    """The line that starts the <StandardDirectory> with this id."""
+    import re
+
+    pattern = r'^[ \t]*<StandardDirectory Id="' + re.escape(name) + r'">\s*$'
+    for m in re.finditer(pattern, text, re.M):
+        return m.group(0).rstrip("\n")
+    return ""
+
+
+def _marker_for_directory(text: str, name: str) -> str:
+    """The line that starts the <Directory> with this name, or "".
+
+    THE ID IS A HASH.  pyappdist makes the directory ids out of the
+    paths, so they change when the bundle changes.  So the directory
+    is found by its NAME, and the line that starts it is the marker.
+    """
+    import re
+
+    pattern = r'^[ \t]*<Directory Id="[^"]+" Name="' + re.escape(name) + r'">\s*$'
+    for m in re.finditer(pattern, text, re.M):
+        return m.group(0).rstrip("\n")
+    return ""
+
+
+def _package_id_is_not(text: str, prop: str) -> bool:
+    """The Package's Id is not this property.
+
+    THE PACKAGE'S `Id` IS THE PACKAGE CODE -- the GUID that says
+    WHICH FILE THIS IS -- and it is derived with a different
+    namespace than the ProductCode.  So it must never be the same
+    as a property, and a check that looks for a property by name
+    has to make sure it is not finding the Package's own Id.
+    """
+    import re
+
+    m = re.search(r"<Package\b[^>]*>", text)
+    if not m:
+        return True
+    pkg = m.group(0)
+    return f'Id="{prop}"' not in pkg
+
+
 def _insert_before(text: str, marker: str, fragment: str) -> str:
     """Put FRAGMENT before MARKER."""
     i = text.find(marker)
@@ -353,12 +407,27 @@ def add_remove_configuration(wxs: Path,
     #
     # so the state directory goes inside it, as a child.  That is the
     # right place: the state directory IS %LOCALAPPDATA%\\ljtunnel.
-    marker = '      <Directory Id="dir_programs" Name="Programs">'
-    if marker not in text:
+    # ---- the state directory, inside the LOCALAPPDATA ROOT ----
+    #
+    # THE STATE DIRECTORY IS %LOCALAPPDATA%\\ljtunnel, and pyappdist
+    # already declares the LocalAppData root:
+    #
+    #     <StandardDirectory Id="LocalAppDataFolder">
+    #
+    # so the directory goes inside it.  The marker is the root's own
+    # line, found by its NAME -- the ids are hashes and they change
+    # when the bundle changes, so a marker with a hard-coded id
+    # worked by luck and stopped working after a clean rebuild.
+    #
+    # MEASURED: that is what happened.
+    marker = _marker_for_standard_directory(text, "LocalAppDataFolder")
+    if not marker:
         return False
-    text = _insert_before(
-        text, marker,
-        DIRECTORY_FRAGMENT.format(sub=state_dir_name, guid=REMOVE_GUID))
+    # AFTER the root's own line, so the state directory is a CHILD of
+    # it -- %LOCALAPPDATA%\ljtunnel -- and not a sibling.
+    text = _insert_after(text, marker,
+                         DIRECTORY_FRAGMENT.format(sub=state_dir_name,
+                                                  guid=REMOVE_GUID))
 
     # ---- the action that removes it ----
     marker = "    <StandardDirectory"
@@ -381,16 +450,18 @@ def add_remove_configuration(wxs: Path,
     # pyappdist's .wxs already has an <InstallExecuteSequence>, and
     # the action goes INSIDE it.  A fragment that brought its own
     # element would give two nested ones, which is not a sequence.
-    if "<InstallExecuteSequence>" in text:
-        # ---- the LAST closing tag, so the action goes in the
-        #      sequence that is already there and not in one of its
-        #      own ----
-        marker = "  </InstallExecuteSequence>"
-        at = text.rfind(marker)
-        if at < 0:
-            return False
-        text = (text[:at] + SEQUENCE_FRAGMENT.format(prop=CHECKED)
-                + text[at:])
+    # ---- the sequence ----
+    #
+    # The closing tag is found by ITS OWN NAME and not by its
+    # indentation: the .wxs is regenerated on every build and the
+    # indentation is not a promise.
+    at = text.rfind("</InstallExecuteSequence>")
+    if at >= 0:
+        # the action goes INSIDE the sequence that is already there
+        line_start = text.rfind("\n", 0, at) + 1
+        indent = text[line_start:at]
+        text = (text[:line_start] + indent + SEQUENCE_FRAGMENT.format(
+            prop=CHECKED).lstrip() + text[at:])
     else:
         # there is no sequence of its own, so one is made
         text = _insert_before(text, "  </Package>",
@@ -426,4 +497,9 @@ def check(wxs: Path) -> bool:
             # the box shows because of the TEXT property, and giving
             # this one a value makes the condition always true
             and f'Id="{CHECKED}"' in text
-            and f'<Property Id="{CHECKED}" Value=' not in text)
+            # and the checkbox's own property is NOT given a value
+            and f'<Property Id="{CHECKED}" Value=' not in text
+            # and the checkbox's property is not the Package's Id
+            # (the Package's Id is the package code, and the two
+            # codes are derived with different namespaces)
+            and _package_id_is_not(text, CHECKED))
