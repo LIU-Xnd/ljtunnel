@@ -290,6 +290,20 @@ environment:
 env -i PATH=/usr/bin:/bin ./ljtunnel --version
 ```
 
+**AND IT IS TESTED ACROSS THE WIRE AS THE BINARY.**  The frozen
+binary is what the unreachable machine actually runs, so the
+cross-machine test uses it -- not the source tree:
+
+```
+LJT_FAR_HOST=... LJT_FAR_PORT=... LJT_FAR_USER=... \
+LJT_FAR_PASSWORD=... LJT_EXPECT_VERSION=... \
+python tools/crossmachine_frozen.py
+```
+
+The version comes from the environment and is not written down in
+the test, so a release does not make the test fail for a reason
+that has nothing to do with the product.
+
 **THE FAR SIDE DELETES ITS CONFIGURATION WITH `ljtunnel forget`.**
 There is no installer there, so the question is asked on the
 keyboard instead:
