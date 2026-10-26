@@ -1146,6 +1146,89 @@ def test_forget():
             paths.state_dir = old
 
 
+def test_host_key_change():
+    """A changed host key is SAID, not left as a row of @ signs.
+
+    OpenSSH closes the connection before it says anything useful,
+    and the dialer used to read that as a banner problem.  So a
+    dialer whose reachable end was reinstalled tried twenty ports
+    and reported twenty rows of "@@@@@@" -- which looks like the
+    quoting is wrong and is not.
+
+    MEASURED: the reachable end's configuration had been cleared,
+    its keys were made again, and the far side's known_hosts still
+    had the old one.  The sshd's side of it said only:
+
+        user: (null): Connection closed by 192.0.2.7 [preauth]
+
+    So there is nothing to match on either side.
+
+    The dialer now checks the fingerprint BEFORE it tries a port, and
+    says what happened.
+    """
+    from ljtunnel import dialer, detect
+
+    # ---- the refusal is named ----
+    check("a changed host key is named in the refusal",
+          "host key" in dialer._refusal_reason(
+              "REMOTE HOST IDENTIFICATION HAS CHANGED"),
+          dialer._refusal_reason("REMOTE HOST IDENTIFICATION HAS CHANGED")[:60])
+    check("and so is a verification failure",
+          "host key" in dialer._refusal_reason(
+              "Host key verification failed."),
+          dialer._refusal_reason("Host key verification failed.")[:60])
+
+    # ---- and the fingerprint of a key is the one ssh would print ----
+    import base64
+    import hashlib
+    key = ("ssh-ed25519 "
+           "AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVa"
+           "r4KD9FAOqx ljtunnel-test-fixture")
+    raw = base64.b64decode(key.split()[1])
+    want = ("SHA256:"
+            + base64.b64encode(hashlib.sha256(raw).digest()).decode()
+            .rstrip("="))
+    check("the changed key is compared as a fingerprint",
+          detect._fingerprint_of(key) == want,
+          detect._fingerprint_of(key)[:40])
+
+    # ---- and the remembered key is read from the known_hosts ----
+    #
+    # THE FILE IS IN THE HASHED FORM, and then the key is the
+    # SECOND field and not the first.  Looking at the first field
+    # finds nothing, and the check never fires.
+    #
+    # AND THE HASH IS A REAL ONE: the file is written by ssh, and
+    # `ssh-keygen -F` finds a line by computing the hash of the
+    # address.  So the file is made the way ssh makes it -- with
+    # ssh-keygen itself -- and not with a made-up hash.
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        kf = os.path.join(tmp, "known_hosts")
+        # ssh-keygen -H hashes a file in place
+        plain = os.path.join(tmp, "plain")
+        with open(plain, "w", encoding="utf-8") as fh:
+            fh.write("[203.0.113.7]:10000 " + key + "\n")
+        h = subprocess.run(["ssh-keygen", "-f", plain, "-H"],
+                           capture_output=True, text=True,
+                           errors="replace", timeout=60)
+        with open(plain, encoding="utf-8", errors="replace") as fh:
+            hashed = fh.read()
+        with open(kf, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(hashed)
+
+        old_dir = paths.state_dir
+        paths.state_dir = lambda: tmp
+        try:
+            got = dialer._known_host_key("203.0.113.7", 10000)
+        finally:
+            paths.state_dir = old_dir
+        check("the remembered host key is read from the known_hosts",
+              got == want, f"{str(got)[:40]} -- the file was: {hashed[:60]}")
+
+
 def test_orphan_sshd():
     """An sshd with no pid file is still stopped.
 
@@ -1682,6 +1765,7 @@ def main() -> int:
                test_firewall_body, test_one_key_two_jobs,
                test_key_command,
                test_forget,
+               test_host_key_change,
                test_orphan_sshd,
                test_elevation):
         try:

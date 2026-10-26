@@ -527,8 +527,11 @@ def _stop_orphans() -> bool:
     config = os.path.basename(paths.sshd_config())
 
     if sys.platform == "win32":
+        # THE LISTENER ONLY.  The per-connection children are
+        # `sshd-session.exe` and they are `stop_sessions()`'s job --
+        # a function that stops one thing should not stop another.
         find_ps = ("Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
-                   "Where-Object { $_.Name -like 'sshd*' -and "
+                   "Where-Object { $_.Name -eq 'sshd.exe' -and "
                    f"$_.CommandLine -like '*{config}*' }} | "
                    "ForEach-Object { $_.ProcessId }")
     else:
@@ -581,10 +584,15 @@ def stop_sessions() -> int:
     sshd is a service named `sshd.exe` and it must not be touched,
     and its sessions are named the same way.
 
-    AND THE LISTENER IS IN THE MATCH TOO.  The name filter is
-    `sshd*`, so it covers `sshd.exe` and `sshd-session.exe` alike --
-    a user-level listener left without a pid file is an orphan, and
-    an orphan holds the port just as well as a session does.
+    AND THE LISTENER IS NOT IN THE MATCH.  The name filter is
+    `sshd-session%`, so it covers the per-connection children and
+    nothing else.  The LISTENER is `sshd.exe`, and it is stopped by
+    `stop()` -- which is a different function with a different job,
+    and a function that stops one thing should not stop another.
+
+    MEASURED: a filter of `sshd*` here killed the listener as well,
+    and the tunnel went down in the middle of a test that was
+    checking that it worked.
     """
     if sys.platform != "win32":
         return 0
@@ -598,7 +606,7 @@ def stop_sessions() -> int:
     # the killing is always zero, and a function that always returns
     # zero cannot say that it did something.
     count_ps = ("(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.Name -like 'sshd*' -and "
+                "Where-Object { $_.Name -like 'sshd-session%' -and "
                 f"$_.CommandLine -like '*{config}*' }} | "
                 "Measure-Object).Count")
 
@@ -615,7 +623,7 @@ def stop_sessions() -> int:
 
     # and kill them
     kill_ps = ("Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
-               "Where-Object { $_.Name -like 'sshd*' -and "
+               "Where-Object { $_.Name -like 'sshd-session%' -and "
                f"$_.CommandLine -like '*{config}*' }} | "
                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
                "-ErrorAction SilentlyContinue }")

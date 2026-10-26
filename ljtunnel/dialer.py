@@ -192,6 +192,47 @@ def main(argv=None) -> int:
     # needs no protocol of our own.
     log(f"  the ports to try: {ports[0]}-{ports[-1]}")
 
+    # ---- THE REACHABLE END'S HOST KEY, CHECKED FIRST ----
+    #
+    # BEFORE a single port is tried.  A changed host key makes EVERY
+    # attempt fail, and the failure looks like a banner problem, so
+    # the dialer would try twenty ports and say nothing about the
+    # real cause.
+    #
+    # The check is the fingerprint of the key the reachable end
+    # presents, compared with the one this end remembers.  The
+    # remembered one is in the state directory's known_hosts, and it
+    # is written there by ssh itself.
+    #
+    # AND A CHANGED KEY IS NOT ACCEPTED.  It is reported, and the
+    # dialer stops.  Accepting it would mean that anybody who could
+    # take the reachable end's address could take the tunnel with it,
+    # and the host key is the one thing in this protocol that cannot
+    # be faked.
+    known = _known_host_key(args.listen_host, args.listen_port)
+    now = detect.host_key_fingerprint(args.listen_port, args.listen_host,
+                                      timeout=15)
+    if now and known and now != known:
+        log("")
+        log(f"  THE REACHABLE END'S HOST KEY CHANGED.")
+        log(f"    it was:  {known}")
+        log(f"    it is:   {now}")
+        log("")
+        log("  That is not a tunnel problem: the reachable end is")
+        log("  presenting a different key than this end remembers.")
+        log("  It happens when the reachable end's configuration was")
+        log("  cleared and the keys were made again.")
+        log("")
+        log("  If you know the reachable end was reinstalled, take")
+        log("  this end's memory of it away:")
+        log("")
+        log(f"    rm {os.path.join(paths.state_dir(), 'known_hosts')}")
+        log("")
+        log("  and start the dialer again.")
+        _kill(srv)
+        sshd.stop()
+        return 1
+
     fwd = None
     got = 0
     for port in ports:
@@ -291,9 +332,79 @@ def _forward_command(args, key: str, port: int, user: str) -> list:
     ]
 
 
+def _known_host_key(host: str, port: int) -> str:
+    """The fingerprint this end remembers for the reachable end, or "".
+
+    IT IS READ FROM THE STATE DIRECTORY'S known_hosts, which is the
+    file ssh itself writes and the file the dialer points ssh at
+    with `UserKnownHostsFile`.  So it is the same memory ssh uses,
+    and there is no second copy to get out of step.
+
+    The file is in the hashed form, so the line is found by asking
+    ssh for it -- `ssh-keygen -F` knows the hash -- rather than by
+    reading the file and looking for the address.
+    """
+    import subprocess
+
+    kf = os.path.join(paths.state_dir(), "known_hosts")
+    if not os.path.isfile(kf):
+        return ""
+
+    # the file is in the hashed form, so ssh-keygen -F finds it
+    try:
+        r = subprocess.run(["ssh-keygen", "-F", f"[{host}]:{port}",
+                            "-f", kf],
+                           capture_output=True, text=True,
+                           errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+    for line in (r.stdout or "").splitlines():
+        s = line.strip()
+        if s.startswith("#"):
+            continue
+        # THE HOST MAY BE IN THE HASHED FORM, and then the line is
+        #
+        #     |1|salt|hash ssh-ed25519 AAAA...
+        #
+        # so the KEY is the SECOND field and not the first.  Looking
+        # at the first field finds nothing, and the check then never
+        # fires.
+        parts = s.split()
+        for i, part in enumerate(parts):
+            if part.startswith(("ssh-", "ecdsa-", "sk-")) and i + 1 < len(parts):
+                return detect._fingerprint_of(" ".join(parts[i:]))
+    return ""
+
+
 def _refusal_reason(stderr: str) -> str:
     """Why the ssh connection did not stay up, in words."""
     text = (stderr or "").lower()
+    # ---- THE HOST KEY CHANGED ----
+    #
+    # This one matters more than the others, because it is the only
+    # one that says something is WRONG rather than that something
+    # was refused.
+    #
+    # OpenSSH closes the connection before it says anything useful,
+    # and the dialer reads it as a row of @ signs -- which looks like
+    # a banner problem and is not.  MEASURED: the reachable end's
+    # host key had been regenerated (its configuration was cleared),
+    # the far side's known_hosts still had the old one, and the
+    # dialer's whole output was twenty lines of "@@@@@@".
+    #
+    # And the sshd's side of it says only:
+    #
+    #     user: (null): Connection closed by 192.0.2.7 [preauth]
+    #
+    # so there is nothing to match on either side.
+    if "host key" in text and ("changed" in text or "mismatch" in text
+                                or "verification failed" in text):
+        return ("the reachable end's host key CHANGED -- the key it "
+                "presents is not the one this end remembers")
+    if "remote host identification has changed" in text:
+        return ("the reachable end's host key CHANGED -- the key it "
+                "presents is not the one this end remembers")
     if "remote port forwarding failed" in text:
         return "the reachable end refused that port"
     if "permission denied" in text:
