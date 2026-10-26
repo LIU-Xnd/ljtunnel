@@ -38,6 +38,27 @@ prompt a person should not be answering.
 A person who presses "No" gets ERROR_CANCELLED (1223), and that is
 the answer to give: "the prompt was declined", which is a thing
 that happened and not a failure.
+
+WHERE THE PROMPT APPEARS
+------------------------
+Windows puts the prompt on the SECURE DESKTOP, which is why a
+person sometimes does not see it: the secure desktop takes over the
+screen, and the prompt is on top of it, and it is gone when the
+answer is given.
+
+And the consent for an administrator is CACHED for a short while,
+so a second prompt does not appear -- which looks exactly like
+"there was no prompt".
+
+So the prompt may not be seen AND the elevation still works.  The
+thing to check is not whether a prompt appeared but whether the
+work got done: the rule is in, or it is not.
+
+THE PROMPT IS ON THE SAFE DESKTOP
+---------------------------------
+The secure desktop means the person cannot see the app that is
+asking, only the prompt.  That is the point of it: a program that
+cannot draw over the prompt cannot pretend to be the prompt.
 """
 from __future__ import annotations
 

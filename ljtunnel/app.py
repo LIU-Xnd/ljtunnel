@@ -207,6 +207,8 @@ class App(tk.Tk):
                    command=self._copy_selected).pack(side="left")
         ttk.Button(row, text="Copy the access key path",
                    command=self._copy_access_path).pack(side="left", padx=6)
+        ttk.Button(row, text="Be an administrator",
+                   command=self._ask_to_be_admin)
         ttk.Button(row, text="Open the firewall",
                    command=self._open_firewall).pack(side="left")
         ttk.Button(row, text="Copy the firewall command",
@@ -551,6 +553,40 @@ class App(tk.Tk):
             self.events.put(("firewall", (ok, msg)))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _ask_to_be_admin(self):
+        """Ask to be an administrator, now.
+
+        The app asks for this when it starts, so the button is for
+        the person who declined that prompt and wants it after all.
+
+        THE PROMPT IS ON THE SECURE DESKTOP.  Windows takes the
+        screen over for it, and it is gone when the answer is
+        given.  So a person who is not watching for it may not see
+        it -- and the consent for an administrator is cached for a
+        short while, so the second one may not come either.
+
+        The button therefore says what is going on, and the app is
+        restarted as an administrator if the answer is yes.
+        """
+        if elevate.is_admin():
+            self._append("this app is already an administrator")
+            self.admin_var.set("administrator")
+            return
+
+        self._append("asking to be an administrator -- Windows will "
+                     "take the screen over for the prompt")
+        started, why = elevate.relaunch_elevated()
+        if started:
+            self._append("  the app is starting as an administrator")
+            self._append("  this window will close")
+            self._on_close()
+            return
+        self._append("  no: " + why)
+        messagebox.showinfo(
+            APP_TITLE,
+            "The app could not start as an administrator.\n\n" + why
+            + "\n\nThe firewall button will ask for it on its own.")
 
     def _firewall_done(self, ok, msg):
         """The firewall rule is in, or it is not.

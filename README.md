@@ -162,7 +162,23 @@ afterwards.
 
 Press **No** and the app carries on without the elevation. The
 firewall button then asks for it by itself, for that one step. So
-declining is not a dead end.
+declining is not a dead end. **Be an administrator** asks again, for
+the person who declined and wants it after all.
+
+### You may not see the prompt
+
+Windows puts the UAC prompt on the **secure desktop**: it takes the
+screen over, the prompt is on top of it, and it is gone when you
+answer. A person who is not watching for it may miss it entirely.
+
+And the consent for an administrator is cached for a short while, so
+the second prompt may not come either. The prompt may not appear
+**and** the elevation still works. So the thing to check is not
+whether a prompt appeared but whether the work got done: the rule is
+in, or it is not.
+
+The window says which it is, on the **rights** line: `administrator`
+or `not an administrator`.
 
 The rule is added with `New-NetFirewallRule`, and not with `netsh`:
 netsh says "the specified value is invalid" for a dozen different
