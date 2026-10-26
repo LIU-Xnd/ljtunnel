@@ -52,19 +52,37 @@ def _run_listen(argv):
 
 
 def _run_key(argv):
-    """Print this end's public key.
+    """Print this end's MACHINE key, for the other end's key list.
 
-    The other end's key list is the handshake: the dialer may log in,
-    and nobody else may. So the key has to be moved by hand, and
-    there is one command that shows it.
+    IT IS THE MACHINE KEY, NOT THE HOST KEY, and the two are not
+    interchangeable.
+
+    The HOST KEY is this end's identity to a CLIENT: it is what a
+    client checks to be sure it is talking to the right machine, and
+    it is what the forwarded port's banner is built on.
+
+    The MACHINE KEY is this end's identity to the OTHER END: it is
+    what the dialer logs in to the listen end with, and it is what
+    the listen end's key list has to name for the dialer to be let
+    in.
+
+    So the key that goes into the other end's key list is the machine
+    key.  Printing the host key there produced a key the other end
+    does not know, and the dialer was refused with:
+
+        the reachable end did not accept this end's key
+
+    which is a correct refusal of the wrong key.
     """
     from . import paths, sshd
     if argv and argv[0] in ("-h", "--help"):
         print("usage: ljtunnel key\n\n"
-              "  print this end's public key, for the other end's key list")
+              "  print this end's machine key, for the other end's key\n"
+              "  list -- the listen end's key list, if this is the\n"
+              "  dialer end")
         return 0
     paths.ensure_dir(paths.state_dir())
-    key = sshd.ensure_host_key()
+    key = sshd.ensure_client_key()
     print(sshd.public_key_of(key))
     return 0
 

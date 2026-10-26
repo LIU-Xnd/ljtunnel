@@ -136,13 +136,19 @@ DIRECTORY_FRAGMENT = """      <!-- THE CONFIGURATION DIRECTORY.  It holds the ke
 #
 # `cmd.exe /c rd /s /q` removes a directory with everything in it,
 # and says nothing about it.
-CUSTOM_ACTION_FRAGMENT = """    <!-- THE ACTION THAT REMOVES THE CONFIGURATION.  It runs in
-         the state directory and takes the directory away.  It is
-         deferred to the SYSTEM context, because the files in it
-         are the user's and the uninstall may be run by an
+CUSTOM_ACTION_FRAGMENT = """    <!-- THE ACTION THAT REMOVES THE CONFIGURATION.  It takes the
+         state directory away, with everything in it.
+         It runs in the PARENT of that directory, NOT in the
+         directory itself: Windows will not remove the directory a
+         process is standing in, so `rd` run from inside it deletes
+         the contents and leaves the empty directory behind.  That
+         is what it did, and the test showed it: the files were gone
+         and the directory was still there.
+         It is deferred to the SYSTEM context, because the files in
+         it are the user's and the uninstall may be run by an
          administrator who is not that user. -->
     <CustomAction Id="ca_rm_ljtunnel_state"
-                  Directory="dir_ljtunnel_state"
+                  Directory="LocalAppDataFolder"
                   ExeCommand="cmd.exe /c rd /s /q &quot;[dir_ljtunnel_state]&quot;"
                   Execute="deferred"
                   Impersonate="no" />

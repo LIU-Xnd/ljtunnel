@@ -884,6 +884,64 @@ def test_firewall_body():
           "the caller can read what happened")
 
 
+def test_key_command():
+    """`ljtunnel key` prints the MACHINE key, not the host key.
+
+    THEY ARE NOT INTERCHANGEABLE, and the mistake is silent on this
+    side and fatal on the other.
+
+    The HOST key is this end's identity to a CLIENT: it is what a
+    client checks to be sure it is talking to the right machine, and
+    it is what the forwarded port's banner is built on.
+
+    The MACHINE key is this end's identity to the OTHER END: it is
+    what the dialer logs in to the listen end with, and it is what
+    the listen end's key list has to name for the dialer to be let
+    in.
+
+    Printing the host key into the other end's key list produces a
+    key the other end does not know, and the dialer is refused with:
+
+        the reachable end did not accept this end's key
+
+    which is a correct refusal of the wrong key.
+    """
+    from ljtunnel import paths, sshd
+
+    # ---- the command prints the machine key ----
+    import subprocess
+    r = subprocess.run([sys.executable, "-m", "ljtunnel", "key"],
+                       capture_output=True, text=True,
+                       errors="replace", timeout=90)
+    printed = (r.stdout or "").strip()
+    check("the key command prints something", r.returncode == 0 and printed,
+          printed[:60])
+    check("and it is a public key",
+          printed.startswith("ssh-ed25519") or printed.startswith("ssh-rsa"),
+          printed[:40])
+
+    # ---- and it is NOT the host key ----
+    #
+    # The two key files are in the same directory, and the public
+    # halves have different bodies.
+    machine_pub = sshd.public_key_of(paths.client_key())
+    host_pub = sshd.public_key_of(paths.host_key())
+    check("the machine key and the host key are different keys",
+          machine_pub != host_pub, "they are the same")
+    check("and the command printed the MACHINE key",
+          printed == machine_pub.strip(),
+          f"it printed the host key" if printed == host_pub.strip()
+          else printed[:50])
+
+    # ---- and the help says so ----
+    r2 = subprocess.run([sys.executable, "-m", "ljtunnel", "key", "--help"],
+                        capture_output=True, text=True,
+                        errors="replace", timeout=90)
+    check("and the help says it is the machine key",
+          "machine key" in (r2.stdout or ""),
+          (r2.stdout or "").strip()[:70])
+
+
 def test_forget():
     """The configuration can be taken away, and the question is asked.
 
@@ -1361,7 +1419,8 @@ def main() -> int:
                test_app, test_detect, test_detect_live, test_permit_listen,
                test_records, test_command, test_no_internal_addresses,
                test_records, test_command, test_no_internal_addresses,
-               test_firewall_body, test_forget,
+               test_firewall_body, test_key_command,
+               test_forget,
                test_elevation):
         try:
             fn()
