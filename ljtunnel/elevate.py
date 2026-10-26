@@ -179,6 +179,27 @@ def _pythonw() -> str:
     return ""
 
 
+# The argument that says "you are already the elevated one".
+#
+# IT IS NOT OPTIONAL.  The elevated copy starts the SAME program, and
+# that program asks to be an administrator when it starts -- so
+# without this the elevated copy asks again, and the copy it starts
+# asks again, and the two ask each other to start, forever.
+#
+# That is not a hypothetical: it happened, and the UAC prompt came
+# up again and again until the person stopped it.
+#
+# So the elevated copy is told, in its arguments, that it is the one
+# that has already been elevated.  It does not ask again.
+ELEVATED_FLAG = "--elevated"
+
+
+def is_elevated_run(argv=None) -> bool:
+    """Was this process started as the elevated one?"""
+    args = list(sys.argv[1:] if argv is None else argv)
+    return ELEVATED_FLAG in args
+
+
 def relaunch_elevated(argv=None) -> tuple:
     """Start this program again as an administrator.
 
@@ -188,16 +209,49 @@ def relaunch_elevated(argv=None) -> tuple:
     was started is a NEW process, and this one is expected to exit:
     two windows would be two panels showing the same state, and the
     un-elevated one could not do the work.
+
+    THE NEW PROCESS IS TOLD IT IS THE ELEVATED ONE.  It carries the
+    flag, and it does not ask again.  Without it the two copies ask
+    each other to start, forever.
     """
     if sys.platform != "win32":
         return False, "not Windows: nothing to elevate"
     if is_admin():
         return False, "already an administrator"
 
+    # THE SAME APP, NOT ANOTHER COPY OF IT.
+    #
+    # The interpreter beside this one is the one that is running now,
+    # so it is the one that is started again.  The installed launcher
+    # is a DIFFERENT program: it is whatever version happens to be
+    # installed, and an installed copy that ALSO asks to be an
+    # administrator would ask again -- and the two would ask each
+    # other to start, forever.
+    #
+    # So the interpreter wins, and the launcher is the fallback for
+    # the case where there is no interpreter to speak of.
+    pythonw = _pythonw()
+    if pythonw:
+        args = list(sys.argv[1:] if argv is None else argv)
+        if not args:
+            args = ["listen"]
+        # The flag is added HERE, so the copy that starts is the one
+        # that is already elevated and does not ask again.
+        if ELEVATED_FLAG not in args:
+            args = [ELEVATED_FLAG] + args
+        # The module is named, not a script path, so the copy that
+        # starts is the copy that is running now.
+        arguments = "-m ljtunnel " + " ".join(
+            f'"{a}"' if " " in a else a for a in args)
+        code = shell_execute_runas(pythonw, arguments)
+        if code == 0:
+            return True, "the app is starting as an administrator"
+        if code == ERROR_CANCELLED:
+            return False, "the UAC prompt was declined"
+        return False, f"the elevation did not happen (error {code})"
+
     launcher = _installed_launcher()
     if launcher:
-        # The launcher takes no arguments: it is the window, and the
-        # window is what the person asked for.
         code = shell_execute_runas(launcher)
         if code == 0:
             return True, "the app is starting as an administrator"
@@ -205,18 +259,5 @@ def relaunch_elevated(argv=None) -> tuple:
             return False, "the UAC prompt was declined"
         return False, f"the elevation did not happen (error {code})"
 
-    pythonw = _pythonw()
-    if not pythonw:
-        return False, ("there is no pythonw.exe beside this interpreter, "
-                       "so the app cannot start itself again")
-
-    args = list(sys.argv[1:] if argv is None else argv)
-    if not args:
-        args = ["listen"]
-    arguments = " ".join(f'"{a}"' if " " in a else a for a in args)
-    code = shell_execute_runas(pythonw, f"-m ljtunnel {arguments}")
-    if code == 0:
-        return True, "the app is starting as an administrator"
-    if code == ERROR_CANCELLED:
-        return False, "the UAC prompt was declined"
-    return False, f"the elevation did not happen (error {code})"
+    return False, ("there is no pythonw.exe beside this interpreter, "
+                   "so the app cannot start itself again")

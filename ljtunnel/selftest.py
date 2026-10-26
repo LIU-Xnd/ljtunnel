@@ -1012,6 +1012,93 @@ def test_elevation():
     check("and the window asks for it at the start",
           "relaunch_elevated" in app_src, "app.py asks for it")
 
+    # ---- THE LOOP GUARD ----
+    #
+    # The elevated copy starts the SAME program, and that program
+    # asks to be an administrator when it starts.  So the elevated
+    # copy has to be told it does not have to ask -- and it is
+    # told in its ARGUMENTS.
+    #
+    # Without that, the two copies ask each other to start, forever.
+    # That is not a hypothetical: it happened, and the UAC prompt
+    # came up again and again until the person stopped it.
+    check("there is a flag for the elevated copy",
+          hasattr(elevate, "ELEVATED_FLAG"), "the flag is there")
+    check("and it is recognisable",
+          elevate.is_elevated_run([elevate.ELEVATED_FLAG, "listen"]),
+          "the flag is seen")
+    check("and an ordinary run is not",
+          not elevate.is_elevated_run(["listen"]),
+          "a plain run is not the elevated one")
+
+    # the flag has to be ADDED to the copy's arguments
+    check("and the relaunch adds it",
+          elevate.ELEVATED_FLAG in src, "the flag is in the relaunch")
+
+    # and the app has to HONOUR it
+    check("and the window honours it",
+          "ELEVATED_FLAG" in app_src, "app.py checks the flag")
+
+    # and the dispatcher has to pass it on, or the copy is told
+    # "unknown command" and exits
+    disp = (pathlib.Path(__file__).resolve().parent / "__main__.py").read_text(
+        encoding="utf-8")
+    check("and the dispatcher passes it on",
+          "elevated" in disp, "__main__.py knows the flag")
+
+    # ---- and the copy is the SAME app, not another one ----
+    #
+    # The installed launcher is whatever version happens to be
+    # installed.  If the copy that starts is the launcher, and the
+    # launcher also asks to be an administrator, the two ask each
+    # other to start, forever.  So the interpreter that is running
+    # now is the one that is started again.
+    #
+    # It is checked by BEHAVIOUR and not by the order of two names
+    # in the source: the relaunch is given a pythonw that cannot
+    # exist and a launcher that can, and the launcher is the one
+    # that has to be started.
+    started = []
+    real_runas = elevate.shell_execute_runas
+
+    def _record(program, arguments=""):
+        started.append((program, arguments))
+        return 0
+
+    elevate.shell_execute_runas = _record
+    real_pythonw = elevate._pythonw
+    real_launcher = elevate._installed_launcher
+    try:
+        elevate._pythonw = lambda: ""
+        elevate._installed_launcher = lambda: r"C:\fake\ljtunnel.exe"
+        elevate.relaunch_elevated(["listen"])
+    finally:
+        elevate.shell_execute_runas = real_runas
+        elevate._pythonw = real_pythonw
+        elevate._installed_launcher = real_launcher
+
+    check("with no interpreter it falls back to the launcher",
+          bool(started) and "ljtunnel.exe" in started[0][0],
+          started[0][0] if started else "(nothing was started)")
+
+    started.clear()
+    elevate.shell_execute_runas = _record
+    try:
+        elevate._pythonw = lambda: r"C:\fake\pythonw.exe"
+        elevate._installed_launcher = lambda: r"C:\fake\ljtunnel.exe"
+        elevate.relaunch_elevated(["listen"])
+    finally:
+        elevate.shell_execute_runas = real_runas
+        elevate._pythonw = real_pythonw
+        elevate._installed_launcher = real_launcher
+
+    check("with an interpreter it starts THAT, not the launcher",
+          bool(started) and "pythonw.exe" in started[0][0],
+          started[0][0] if started else "(nothing was started)")
+    check("and the flag is on its command line",
+          bool(started) and elevate.ELEVATED_FLAG in started[0][1],
+          started[0][1] if started else "")
+
 
 # ------------------------------------------------------- the command
 

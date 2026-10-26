@@ -128,7 +128,26 @@ def main(argv=None) -> int:
         print(__version__)
         return 0
 
+    # THE FLAG THE ELEVATED COPY CARRIES.
+    #
+    # The app asks to be an administrator when it starts, so the
+    # elevated copy has to be told it does not have to ask.  It is
+    # told in its arguments, and the flag comes FIRST.
+    #
+    # It is taken off here and put back on the subcommand's own
+    # arguments, because the subcommand is the one that understands
+    # it.  Without this the elevated copy is told "unknown command"
+    # and exits, and the window never appears.
+    elevated = False
+    if argv and argv[0] == "--elevated":
+        elevated = True
+        argv = argv[1:]
+        if not argv:
+            argv = ["listen"]
+
     command, rest = argv[0], argv[1:]
+    if elevated:
+        rest = ["--elevated"] + rest
 
     if command == "listen":
         run = _run_listen

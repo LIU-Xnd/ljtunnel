@@ -96,3 +96,14 @@ def log_file() -> str:
 
 def dialer_log() -> str:
     return os.path.join(state_dir(), "ljtunnel_dialer.log")
+
+
+def start_record() -> str:
+    """Where the app writes down how it started.
+
+    "elevated" or "plain".  The difference between the two is
+    invisible from the outside -- the window looks the same -- and
+    it is the difference between the firewall rule going in with a
+    prompt and the firewall rule going in without one.
+    """
+    return os.path.join(state_dir(), "ljtunnel_start.txt")

@@ -744,6 +744,34 @@ def _install_sigint(app) -> None:
     t.start()
 
 
+def _record_start(what: str) -> None:
+    """Write down how the app started.
+
+    It is a small file in the state directory, and it says one of
+    two things: "elevated" -- the app asked to be an administrator
+    and the person said yes -- or "plain" -- it did not, or it
+    could not.
+
+    WHY IT IS WORTH WRITING DOWN.  The difference between the two is
+    invisible from the outside: the window looks the same, and the
+    only thing that changes is whether the firewall button needs a
+    prompt.  So when the dialers time out and nobody knows why, this
+    is the file that says which of the two things happened.
+
+    THE THREE VALUES:
+      elevated      the app is an administrator
+      plain         it is not, and it is carrying on without
+      handing over  it has started an elevated copy and is going away
+    """
+    try:
+        paths.ensure_dir(paths.state_dir())
+        with open(paths.start_record(), "w", encoding="utf-8",
+                  newline="\n") as fh:
+            fh.write(what + "\n")
+    except OSError:
+        pass
+
+
 def main(argv=None) -> int:
     """Run the window, as an administrator if it can be.
 
@@ -765,12 +793,30 @@ def main(argv=None) -> int:
     and the firewall button then asks for it on its own, for that
     one step.  So declining is not a dead end.
     """
+    # THE FLAG SAYS "you are the elevated one".
+    #
+    # The elevated copy starts the SAME program, and that program
+    # asks to be an administrator when it starts.  So the elevated
+    # copy is told, in its arguments, that it does not have to ask.
+    # Without that, the two copies ask each other to start, forever
+    # -- which is not a hypothetical: it happened.
+    if argv and elevate.ELEVATED_FLAG in argv:
+        argv = [a for a in argv if a != elevate.ELEVATED_FLAG]
+        _record_start("elevated")
+        return _run_window(argv)
+
     if sys.platform == "win32" and not elevate.is_admin():
         started, why = elevate.relaunch_elevated(argv)
         if started:
             # The elevated copy is running now.  This one has to go:
             # two windows would be two panels showing the same state,
             # and this one cannot do the work.
+            #
+            # The record is written by the ELEVATED copy, which is
+            # the one that is actually running.  This one writes
+            # "handing over" so that a record left behind by a
+            # crash is not read as "the app is running".
+            _record_start("handing over")
             return 0
         # The person said no, or the elevation did not happen.  Carry
         # on without it: the firewall button asks for it on its own.
@@ -780,6 +826,9 @@ def main(argv=None) -> int:
         else:
             print("could not run as an administrator: " + why,
                   file=sys.stderr)
+        _record_start("plain")
+    else:
+        _record_start("elevated")
 
     return _run_window(argv)
 
