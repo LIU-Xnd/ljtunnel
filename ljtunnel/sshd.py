@@ -77,6 +77,7 @@ HostKey {host_key}
 # the dialer end does not need to accept one from anyone.
 {forwarding}
 {permit_listen}
+{penalties}
 """
 
 
@@ -146,6 +147,60 @@ def ssh_keygen_path() -> str:
     raise SystemExit("ssh-keygen not found")
 
 
+def _penalties() -> str:
+    """The penalty settings, for the config.
+
+    WINDOWS ONLY, AND IT MATTERS MORE THAN IT LOOKS.
+
+    OpenSSH for Windows 10.0 has PerSourcePenalties on by default.
+    It is a defence against a machine that opens many connections
+    and does not authenticate them -- and the tunnel's OWN dialer
+    does exactly that, because it CHECKS the ports it asks for by
+    connecting to them.
+
+    So a dialer that tries a few ports can put its own address into
+    the penalty list, and then:
+
+        Not allowed at this time
+
+    is what the sshd sends -- instead of a banner.  The client sees
+    a line that is not an SSH banner and gives up with "banner line
+    contains invalid characters", and the sshd's log blames the
+    banner rather than the penalty.  That cost an afternoon.
+
+    The penalty is a good idea and it stays on.  But the tunnel's own
+    machine is EXEMPT: the dialer may be on the same machine as the
+    listen end (a test does exactly that), and a tunnel must not
+    lock ITSELF out.
+    """
+    if sys.platform != "win32":
+        return ""
+
+    # The exemption is by ADDRESS, and the addresses that matter are
+    # the loopback and this end's own -- the ones the tunnel itself
+    # uses.  A dialer on another machine is not exempt, and the
+    # penalty still protects the listen end from a dialer that
+    # misbehaves.
+    exempt = ["127.0.0.1", "::1"]
+    try:
+        import socket
+        own = socket.gethostbyname(socket.gethostname())
+        if own and own != "127.0.0.1":
+            exempt.append(own)
+    except OSError:
+        pass
+
+    return (
+        "\n# The per-source penalty is ON, and the tunnel's own\n"
+        "# addresses are exempt from it.  A dialer CHECKS the ports\n"
+        "# it asks for by connecting to them, which is exactly what\n"
+        "# the penalty is for -- so without the exemption the tunnel\n"
+        "# locks ITSELF out, and the sshd says 'Not allowed at this\n"
+        "# time' where a banner should be.\n"
+        "PerSourcePenaltyExemptList " + ",".join(exempt) + "\n"
+    )
+
+
 def write_config(port: int, listen: str = "0.0.0.0",
                  gateway_ports: bool = False,
                  allow_forwarding: bool = False,
@@ -187,6 +242,7 @@ def write_config(port: int, listen: str = "0.0.0.0",
                     if allow_forwarding else
                     "AllowTcpForwarding no\n"),
         permit_listen=permit,
+        penalties=_penalties(),
     )
     path = paths.sshd_config()
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -418,6 +474,66 @@ def stop() -> bool:
         return False
     _forget_pid()
     return True
+
+
+def stop_sessions() -> int:
+    """Stop the per-connection children, and say how many there were.
+
+    THE LISTENER IS NOT ENOUGH.  On Windows the per-CONNECTION child
+    is `sshd-session.exe`, and it is the one that holds the FORWARDED
+    port open.  So killing the listener leaves the forwarded port
+    held by a session that is still there -- and the next launch
+    finds that port busy for no reason anybody can see.
+
+    On Linux sshd's children die with the listener, so there is
+    nothing to do and this returns 0.
+
+    THE CHILDREN ARE FOUND BY THEIR COMMAND LINE, which names this
+    project's config.  Never by the image name alone: the SYSTEM
+    sshd is a service named `sshd.exe` and it must not be touched,
+    and its sessions are named the same way.
+    """
+    if sys.platform != "win32":
+        return 0
+
+    import subprocess as _sp
+
+    config = os.path.basename(paths.sshd_config())
+
+    # HOW MANY THERE ARE FIRST, so the answer is the number that were
+    # there and not the number that are left.  A count taken AFTER
+    # the killing is always zero, and a function that always returns
+    # zero cannot say that it did something.
+    count_ps = ("(Get-CimInstance Win32_Process -Filter "
+                "\"Name LIKE 'sshd-session%'\" -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.CommandLine -like "
+                f"'*{config}*' }} | Measure-Object).Count")
+
+    try:
+        r = _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-Command", count_ps], capture_output=True, text=True,
+                    errors="replace", timeout=60)
+        n = int((r.stdout or "0").strip() or 0)
+    except (OSError, ValueError, _sp.TimeoutExpired):
+        return 0
+
+    if not n:
+        return 0
+
+    # and kill them
+    kill_ps = ("Get-CimInstance Win32_Process -Filter "
+               "\"Name LIKE 'sshd-session%'\" -ErrorAction SilentlyContinue | "
+               "Where-Object { $_.CommandLine -like "
+               f"'*{config}*' }} | "
+               "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+               "-ErrorAction SilentlyContinue }")
+    try:
+        _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                 "-Command", kill_ps], capture_output=True, text=True,
+                errors="replace", timeout=60)
+    except (OSError, _sp.TimeoutExpired):
+        pass
+    return n
 
 
 def _forget_pid() -> None:

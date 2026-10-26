@@ -43,6 +43,8 @@ import subprocess
 import sys
 import time
 
+from ljtunnel import sshd
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The port the test uses.  It is the real one, because the point is
@@ -228,6 +230,13 @@ def run() -> int:
     time.sleep(2)
     check("the window released the port", listening(LISTEN_PORT) == 0,
           str(listening(LISTEN_PORT)))
+    # and the FORWARDED ports too: on Windows a per-connection
+    # session holds those, and the listener going away does not take
+    # it with it.  A forwarded port that is still held is a port the
+    # next launch finds busy for no reason anybody can see.
+    left = sshd.stop_sessions()
+    check("no session is left holding a port", left == 0,
+          f"{left} session(s) were left")
     check("no ljtunnel sshd is left", ljt_processes() == "0",
           ljt_processes())
 

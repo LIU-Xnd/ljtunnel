@@ -376,6 +376,11 @@ class Listener:
         except Exception:
             pass
         sshd.stop()
+        # The per-connection children hold the FORWARDED ports, and
+        # the listener going away does not take them with it.  A
+        # forwarded port that is still held is a port the next
+        # launch finds busy for no reason anybody can see.
+        sshd.stop_sessions()
 
 
 def dialer_command(user: str = "", host: str = "") -> str:

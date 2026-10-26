@@ -123,6 +123,49 @@ def test_config():
                 check("the config turns off privilege separation "
                       "(Windows needs it)",
                       "UsePrivilegeSeparation no" in text)
+
+                # THE PENALTY EXEMPTION.
+                #
+                # OpenSSH for Windows has PerSourcePenalties on by
+                # default, and a dialer CHECKS the ports it asks for
+                # by connecting to them -- which is exactly what the
+                # penalty is for.  So a dialer that tries a few ports
+                # can put its own address into the penalty list, and
+                # then the sshd sends:
+                #
+                #     Not allowed at this time
+                #
+                # where a banner should be.  The client sees a line
+                # that is not an SSH banner and gives up with "banner
+                # line contains invalid characters", and the log
+                # blames the banner rather than the penalty.
+                #
+                # So the tunnel's own addresses are exempt.
+                check("the config exempts the tunnel's own addresses",
+                      "PerSourcePenaltyExemptList" in text,
+                      text[-140:].strip())
+                check("and the loopback is among them",
+                      "127.0.0.1" in text, text[-140:].strip())
+
+                # and the sshd KEEPS it: an option it does not know
+                # is a warning, not an error, and it would be nice
+                # to know.
+                #
+                # `sshd -T` is asked about the REAL config, not the
+                # scratch one: -T refuses to run without a host key
+                # it can load, and the scratch directory has none.
+                real_cfg = paths.sshd_config()
+                sshd.ensure_host_key()
+                real_cfg = sshd.write_config(10001, "0.0.0.0",
+                                             permit_listen=[10002])
+                r = subprocess.run([sshd.sshd_path(), "-f", real_cfg, "-T"],
+                                   capture_output=True, text=True,
+                                   errors="replace", timeout=60)
+                out = (r.stdout or "")
+                check("and the sshd keeps the exemption",
+                      "persourcepenaltyexemptlist" in out.lower(),
+                      out[-160:].strip() if out
+                      else (r.stderr or "")[:160])
             else:
                 # The check is for the OPTION, not the word: the
                 # template mentions it in a comment, because the
