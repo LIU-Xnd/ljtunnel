@@ -1146,6 +1146,85 @@ def test_forget():
             paths.state_dir = old
 
 
+def test_listener_handle():
+    """The listener's process is reachable under BOTH of its names.
+
+    IT IS CALLED `proc` IN THE LISTENER AND `srv` IN THE WINDOW, and
+    two names for one thing is a trap: a script that reaches for the
+    other name gets an AttributeError, and the message points at
+    the script rather than at the naming.
+
+    MEASURED: a probe that read `listener.srv` died with
+
+        AttributeError: 'Listener' object has no attribute 'srv'
+
+    and the probe was not wrong about wanting the process -- it was
+    wrong about which name it was under.
+
+    AND A STOPPED LISTENER SAYS SO.  A listener that has been
+    stopped still saying it has a process is a listener that says
+    it is running when it is not.
+    """
+    from ljtunnel import listen as L
+
+    # ---- both names, before anything is started ----
+    listener = L.Listener(sshd_port=10000, first_port=20000, count=1)
+    check("the listener has no process yet", listener.proc is None)
+    check("and the window's name says the same",
+          listener.srv is None, str(listener.srv))
+
+    # ---- and after a stop ----
+    #
+    # It is stopped without being started, so nothing is launched
+    # and no port is taken.
+    listener.stop()
+    check("a stopped listener says it has no process",
+          listener.proc is None)
+    check("and the window's name says the same",
+          listener.srv is None, str(listener.srv))
+
+    # ---- AND WITH A REAL PROCESS, THE TWO NAMES ARE THE SAME ONE ----
+    #
+    # WITHOUT THIS THE CHECK IS WORTHLESS: a property that always
+    # returns None satisfies "is None" every time, and the suite
+    # goes green with the property broken.
+    #
+    # MEASURED: that is what happened -- the first version of this
+    # check passed with the property returning None.
+    #
+    # So a real sshd is started on a port the firewall admits, and
+    # the two names have to be the SAME OBJECT.
+    import subprocess
+    import time
+
+    from ljtunnel import sshd
+
+    port = 10000
+    if sshd.port_busy(port):
+        check("the port for the listener test is free (skipped)", True)
+        return
+
+    sshd.stop()
+    sshd.stop_sessions()
+    time.sleep(1)
+
+    live = L.Listener(sshd_port=port, first_port=20000, count=1)
+    try:
+        proc = live.start()
+        time.sleep(2)
+        check("the listener has a process", live.proc is not None)
+        check("and the window's name is the SAME process",
+              live.srv is live.proc, f"{live.srv} vs {live.proc}")
+        check("and it is the one that was started",
+              live.srv is proc, f"{live.srv} vs {proc}")
+    finally:
+        live.stop()
+    check("and a stopped listener says it has no process",
+          live.proc is None)
+    check("and the window's name says the same",
+          live.srv is None, str(live.srv))
+
+
 def test_host_key_change():
     """A changed host key is SAID, not left as a row of @ signs.
 
@@ -1812,6 +1891,7 @@ def main() -> int:
                test_firewall_body, test_one_key_two_jobs,
                test_key_command,
                test_forget,
+               test_listener_handle,
                test_host_key_change,
                test_orphan_sshd,
                test_elevation):

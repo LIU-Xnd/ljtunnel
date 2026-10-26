@@ -338,7 +338,27 @@ class Listener:
             first_port=first_port,
             count=count,
             log_path=paths.log_file())
+        # THE sshd PROCESS.
+        #
+        # It is called `proc` here and `srv` in the window, and the
+        # two names for one thing is a trap: a script that reads
+        # `listener.srv` gets an AttributeError, and the message
+        # points at the script rather than at the naming.
+        #
+        # So BOTH names work.  `proc` is the real attribute and
+        # `srv` is what the window calls it.
         self.proc = None
+
+    @property
+    def srv(self):
+        """The sshd process, under the name the window uses.
+
+        IT IS THE SAME PROCESS as `proc`.  The window calls it `srv`
+        and this class calls it `proc`, and a script that reaches
+        for the other name gets an AttributeError that says nothing
+        about the naming.
+        """
+        return self.proc
 
     def start(self) -> subprocess.Popen:
         """Start the sshd, and start watching the log."""
@@ -399,6 +419,10 @@ class Listener:
                 self.proc.wait(timeout=8)
         except Exception:
             pass
+        # AND THE HANDLE IS DROPPED.  A stopped listener that still
+        # says it has a process is a listener that says it is
+        # running when it is not, and the window shows that.
+        self.proc = None
         sshd.stop()
         # The per-connection children hold the FORWARDED ports, and
         # the listener going away does not take them with it.  A
