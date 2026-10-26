@@ -114,6 +114,31 @@ be read.
 A file that cannot be read is treated as no records, not as a crash:
 the records are a convenience, and the program works without them.
 
+## How the dialers are found
+
+The panel shows the dialers that are up, and it finds them by itself:
+nobody types a port into it and nobody says a dialer has arrived.
+
+**It asks the forwarded port who is there.**  Behind every forwarded
+port there is the dialer's own sshd, and the host key that answers
+there is the dialer's identity -- it cannot be faked, because it is
+what the key exchange is built on.  The listen end looks that key up
+in its own key list, and the name on the key it finds is the
+dialer's name.
+
+**And the dialer's host key is its machine key.**  So the key behind
+a forwarded port is the key the dialer logged in with, and the listen
+end already knows it.  One key, two jobs.
+
+**The socket table says which ports are open**, and that needs no
+log at all -- which matters, because on Windows the sshd's sessions
+do not log to the listener's pipe, so the log cannot say who
+connected.
+
+A port that is open but whose key is not in the list is still shown,
+by its fingerprint.  That is a dialer whose key was added before
+the records existed.
+
 ## The keys
 
 Two identities, two relationships:
@@ -201,8 +226,20 @@ from a terminal running as administrator.
 ```
 ljtunnel listen      the reachable end -- the window on Windows
 ljtunnel dialer      the unreachable end
-ljtunnel key         print this end's public key
+ljtunnel key         print this end's machine key, for the other end's key list
+ljtunnel forget      remove this end's configuration: the keys, the records,
+                     the config and the log
 ```
+
+`forget` is how the far side gets rid of its configuration, where
+there is no installer to ask.  It stops the tunnel, removes the state
+directory, and says that the firewall rule is a machine-wide thing
+and stays.  The firewall rule is removed by the window's own button.
+
+**On Windows the uninstaller asks the same question.**  The keys are
+the identity of a tunnel, so removing them by default would break
+every tunnel that used this machine; so they are kept, and the
+uninstall page has a box on it for the person who wants them gone.
 
 ## Install
 
@@ -213,7 +250,30 @@ appdist/windows/dist/ljtunnel-<version>.msi
 ```
 
 It bundles a Python runtime, so it works on a machine with nothing on
-it. The dialer end is a script and needs Python 3.9 or later.
+it.
+
+**The dialer end can be a single file with nothing on it either.**
+The far side is often a machine with no Python, no conda and no pip,
+so the binary carries its own interpreter:
+
+```
+dist/linux/ljtunnel
+```
+
+Build it on the machine it will run on, or an older one: it links
+against the glibc of the system that built it, and glibc only ever
+goes forwards.  On server41:
+
+```
+/home/liuxd/miniconda3/envs/ljtunnel-dev/bin/python tools/build_linux_binary.py
+```
+
+The whole dispatcher is frozen, not one subcommand, so `key` and
+`dialer` are both in it.  And it runs with an empty environment:
+
+```
+env -i PATH=/usr/bin:/bin ./ljtunnel --version
+```
 
 ## Tests
 
