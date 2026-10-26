@@ -252,6 +252,20 @@ appdist/windows/dist/ljtunnel-<version>.msi
 It bundles a Python runtime, so it works on a machine with nothing on
 it.
 
+**THE UNINSTALL ASKS ABOUT THE CONFIGURATION.**  The keys, the
+records, the config and the log are per-user data, and the keys are
+the identity of a tunnel -- so removing them by default would
+silently break every tunnel that used this machine.  So the
+uninstall page has a checkbox:
+
+```
+[ ] Remove the configuration and the keys
+```
+
+Ticked, the whole state directory goes.  Unticked, it stays, and
+the next install picks up where this one left off.
+
+
 **The dialer end can be a single file with nothing on it either.**
 The far side is often a machine with no Python, no conda and no pip,
 so the binary carries its own interpreter:
@@ -268,12 +282,30 @@ goes forwards.  On server41:
 /home/liuxd/miniconda3/envs/ljtunnel-dev/bin/python tools/build_linux_binary.py
 ```
 
-The whole dispatcher is frozen, not one subcommand, so `key` and
-`dialer` are both in it.  And it runs with an empty environment:
+The whole dispatcher is frozen, not one subcommand, so `key`,
+`dialer` and `forget` are all in it.  And it runs with an empty
+environment:
 
 ```
 env -i PATH=/usr/bin:/bin ./ljtunnel --version
 ```
+
+**THE FAR SIDE DELETES ITS CONFIGURATION WITH `ljtunnel forget`.**
+There is no installer there, so the question is asked on the
+keyboard instead:
+
+```
+ljtunnel forget
+```
+
+It shows what is in the state directory and asks before removing it,
+because the keys are the identity of a tunnel.  The answer "no"
+leaves everything alone.  It stops the sshd first, so nothing is
+left holding a port.
+
+The firewall rule is NOT removed by it: that is a machine-wide thing
+the tunnel asked for, and the person who asked for it may want it to
+stay.
 
 ## Tests
 
