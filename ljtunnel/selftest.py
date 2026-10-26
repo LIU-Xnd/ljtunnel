@@ -694,20 +694,27 @@ def test_app():
 # somebody will copy, and it will be wrong.
 _LOG_ACCEPT = ("debug1: user: xnd_l: Accepted publickey for xnd_l from "
                "192.0.2.7 port 48238 ssh2: ED25519 "
-               "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c")
+               "SHA256:RY1xRnF/3WiV8FKLVS6z16esXWAcCAPhjY30GHzqlzk")
 _LOG_FORWARD = ("debug1: user: xnd_l: server_input_global_request: "
                 "tcpip-forward listen 0.0.0.0 port 20002 [postauth]")
 _LOG_KEY_OPTION = (
     "debug2: C:/Users/xnd_l/AppData/Local/ljtunnel/"
     "ljtunnel_authorized_keys:1: check options: "
     "'environment=\"LJT_NAME=box-a\" ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIPOXAuTF66OZSgkRSFdn+6Hg6z9j9mUubai0zY/eK6VE"
-    " liuxd@zlabm'")
+    "AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVar4KD9FAOqx"
+    " ljtunnel-test-fixture'")
 
-# The fingerprint of that key, as sshd prints it.  It was MEASURED:
-# the detector computes it from the key text and it has to come out
-# the same, or the name can never be joined to the session.
-_FP_A = "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c"
+# The fingerprint of that key, as sshd prints it.
+#
+# IT WAS COMPUTED BY OPENSSH ITSELF, not by this project's own code:
+# `ssh-keygen -lf` on the key.  If the detector's arithmetic and
+# OpenSSH's disagree, the check below is the one that catches it --
+# so the expected value cannot come from the code under test.
+#
+# The key is a FIXTURE, made for this test and thrown away with it.
+# It is not anybody's key: an earlier version of this file carried
+# a real machine's public key, and a repository is a public place.
+_FP_A = "SHA256:RY1xRnF/3WiV8FKLVS6z16esXWAcCAPhjY30GHzqlzk"
 
 
 def test_detect():
@@ -715,10 +722,13 @@ def test_detect():
     from ljtunnel import detect
 
     # ---- the fingerprint is computed the way sshd prints it ----
+    #
+    # The key is the FIXTURE above, and the expected value is what
+    # OpenSSH itself says about it.
     eq("the fingerprint of a key is computed the way sshd prints it",
        detect._fingerprint_of(
-           "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPOXAuTF66OZSgkRSFdn+6Hg6z9j9"
-           "mUubai0zY/eK6VE liuxd@zlabm"),
+           "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVa"
+           "r4KD9FAOqx ljtunnel-test-fixture"),
        _FP_A)
 
     # ---- the key line gives the NAME ----
@@ -1323,6 +1333,51 @@ def test_no_internal_addresses():
                 bad.append(f"{name}:{n}")
     check("no internal address in the tracked tree", not bad,
           ", ".join(bad[:8]))
+
+    # ---- AND NO PUBLIC KEY EITHER ----
+    #
+    # A public key in a public repository is not a secret -- anybody
+    # can use it to log in.  So it is a leak of the same kind as the
+    # address, and for the same reason: it belongs to a machine, not
+    # to the software.
+    #
+    # THE FIXTURES ARE ALLOWED, and they are named: a test needs a
+    # key to compute a fingerprint from, and a made-up one is
+    # better than a real one.  The ones the tests use all carry the
+    # comment "ljtunnel-test-fixture", and a key without that
+    # comment is one that came from a machine.
+    #
+    # MEASURED: this file and the GUI test carried a real machine's
+    # public key until this was written.
+    keypat = _re.compile(
+        r"AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{40,}")
+    bad_keys = []
+    for name in names:
+        p = root / name
+        if not p.is_file() or p.suffix in (".msi", ".exe", ".ico", ".png",
+                                            ".pyc", ".zip"):
+            continue
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = body.splitlines()
+        for n, line in enumerate(lines, 1):
+            if not keypat.search(line):
+                continue
+            # The fixtures are marked, and the mark is either on this
+            # line or on one of the lines around it -- a key body is
+            # often split over two string literals, so the comment
+            # that names the fixture can be a line away.
+            #
+            # THE MARK IS ON THE LINE ITSELF for the ones that say
+            # what they are, so the window is a few lines either side.
+            window = " ".join(lines[max(0, n - 3):n + 3])
+            if "ljtunnel-test-fixture" in window or "do-not-use" in window:
+                continue
+            bad_keys.append(f"{name}:{n}")
+    check("no public key in the tracked tree but the fixtures",
+          not bad_keys, ", ".join(bad_keys[:8]))
 
 
 # --------------------------------------------------------- the elevation

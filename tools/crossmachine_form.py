@@ -157,8 +157,19 @@ def main():
     print("  the key list:")
     for line in L.read_keys():
         print("   ", line[:100])
+    # ---- the key that was actually put in the list is in the list ----
+    #
+    # NOT A HARDCODED FINGERPRINT.  The far machine's key is read
+    # from it, and the far machine may have forgotten its
+    # configuration and generated a new one -- so the check is made
+    # against the key that was read, not against one that was
+    # written down when the test was first written.  MEASURED: the
+    # hardcoded fingerprint did not match a regenerated key, and the
+    # test failed for a reason that had nothing to do with the
+    # product.
+    far_body = far_key.split()[1] if far_key != "NONE" and " " in far_key else ""
     check("the far machine's key is in the list",
-          any("IPOXAuTF" in l or "IPOXAuTF" in l for l in L.read_keys()),
+          bool(far_body) and any(far_body in l for l in L.read_keys()),
           f"{len(L.read_keys())} keys")
     import pathlib as _pl
     kf = _pl.Path(os.environ["LOCALAPPDATA"]) / "ljtunnel" / \

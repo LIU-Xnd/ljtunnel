@@ -33,21 +33,29 @@ from . import detect, listen as L, paths, records, sshd
 _results = []
 
 # The log lines a real sshd wrote, copied from a real run.
+#
+# THE KEY IN THEM IS A FIXTURE, made for the test and thrown away
+# with it.  An earlier version of this file carried a real machine's
+# public key, and a repository is a public place.  The fingerprint
+# was computed by OpenSSH itself (`ssh-keygen -lf`), not by this
+# project's code, so the check is against something independent.
 _LOG_ACCEPT = ("Accepted publickey for xnd_l from 192.0.2.7 "
                "port 48238 ssh2: ED25519 "
-               "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c")
+               "SHA256:RY1xRnF/3WiV8FKLVS6z16esXWAcCAPhjY30GHzqlzk")
 _LOG_FORWARD = ("debug1: user: xnd_l: server_input_global_request: "
                 "tcpip-forward listen 0.0.0.0 port 20002 [postauth]")
 _LOG_KEY_OPTION = (
     "debug2: C:/Users/xnd_l/AppData/Local/ljtunnel/"
     "ljtunnel_authorized_keys:1: check options: "
     "'environment=\"LJT_NAME=testbox\" ssh-ed25519 "
-    "AAAAC3NzaC1lZDI1NTE5AAAAIPOXAuTF66OZSgkRSFdn+6Hg6z9j9mUubai0zY/eK6VE"
-    " liuxd@zlabm'")
-_FP = "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c"
+    "AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVar4KD9FAOqx"
+    " ljtunnel-test-fixture'")
+_FP = "SHA256:RY1xRnF/3WiV8FKLVS6z16esXWAcCAPhjY30GHzqlzk"
 
 # A key that is not anybody's: it is here so the test can put it in
-# the key list and take it out again.
+# the key list and take it out again.  It is not even a real key --
+# the base64 does not decode to a valid one, and it does not have
+# to: the test only puts it in a list and takes it out.
 _FAKE_KEY = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"
              "dGUzdC1rZXktZm9yLXRoZS13aW5kb3ctdGVzdA"
              " do-not-use-this-key")

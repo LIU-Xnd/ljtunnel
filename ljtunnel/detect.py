@@ -22,7 +22,7 @@ THE LOG
 The listen end's sshd writes a line per event.  The two that matter:
 
     Accepted publickey for xnd_l from 192.0.2.7 port 35536 ssh2:
-        ED25519 SHA256:xht76GglXU2cFU/...
+        ED25519 SHA256:RY1xRnF/3WiV8FKLVS6z16...
 
     debug1: user: xnd_l: server_input_global_request: rtype
         tcpip-forward listen 0.0.0.0 port 10002 [postauth]
