@@ -915,6 +915,13 @@ def test_one_key_two_jobs():
     """
     from ljtunnel import dialer, paths, sshd
 
+    # THE HOST KEY HAS TO BE THERE, or the test is testing nothing.
+    # A person who has just uninstalled ljtunnel -- and taken the
+    # configuration with them -- has no host key, and the suite
+    # would fail for a reason that has nothing to do with the code.
+    sshd.ensure_host_key()
+    sshd.ensure_client_key()
+
     # ---- the config names the machine key ----
     cfg = sshd.write_config(10001, "127.0.0.1", host_key=paths.client_key())
     text = open(cfg, encoding="utf-8").read()
@@ -981,6 +988,10 @@ def test_key_command():
     which is a correct refusal of the wrong key.
     """
     from ljtunnel import paths, sshd
+
+    # the key has to be there, or there is nothing to print
+    sshd.ensure_client_key()
+    sshd.ensure_host_key()
 
     # ---- the command prints the machine key ----
     import subprocess
@@ -1080,6 +1091,39 @@ def test_forget():
         finally:
             paths.state_dir = old
 
+    # ---- AND THE ANSWER "NO" MUST NOT REMOVE ANYTHING ----
+    #
+    # This is the whole point of the question, and the one that a
+    # test which only ever says "yes" does not check.  So the
+    # question is asked with the answer "no", and the directory has
+    # to still be there.
+    #
+    # The answer goes in on STDIN, because that is where the
+    # question reads it from, and the keyboard is not a thing a
+    # test can have.
+    with tempfile.TemporaryDirectory() as tmp:
+        old = paths.state_dir
+        paths.state_dir = lambda: tmp
+        try:
+            with open(paths.sshd_config(), "w", encoding="utf-8") as fh:
+                fh.write("Port 10001\n")
+            with open(paths.client_key(), "w", encoding="utf-8") as fh:
+                fh.write("PRIVATE KEY\n")
+
+            saved = sys.stdin
+            sys.stdin = io.StringIO("n\n")
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = forget.forget(assume_yes=False)
+            finally:
+                sys.stdin = saved
+            check("the answer 'no' is not a removal", rc != 0, str(rc))
+            check("and the configuration is still there",
+                  os.path.isdir(tmp) and bool(os.listdir(tmp)),
+                  "the directory went without being asked to")
+        finally:
+            paths.state_dir = old
+
     # ---- and removing what is not there is not a failure ----
     with tempfile.TemporaryDirectory() as tmp:
         old = paths.state_dir
@@ -1107,6 +1151,11 @@ def test_permit_listen():
 
     # sshd keeps only the LAST PermitListen line, so twenty lines
     # would leave one port.  The check reads the file sshd reads.
+    #
+    # AND THE HOST KEY HAS TO BE THERE: `sshd -T` refuses to run
+    # without one it can load, and it says nothing about the ports
+    # when it refuses.
+    sshd.ensure_host_key()
     if sys.platform == "win32":
         exe = sshd.sshd_path()
     else:
