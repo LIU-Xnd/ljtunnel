@@ -1055,9 +1055,20 @@ def test_elevation():
     # now is the one that is started again.
     #
     # It is checked by BEHAVIOUR and not by the order of two names
-    # in the source: the relaunch is given a pythonw that cannot
-    # exist and a launcher that can, and the launcher is the one
-    # that has to be started.
+    # in the source: the relaunch is given an interpreter that
+    # cannot exist and a launcher that can, and the launcher is the
+    # one that has to be started.
+    #
+    # AND THE FLAG IS ON THE COPY'S COMMAND LINE.  Without it the
+    # copy asks to be an administrator again, and the two ask each
+    # other to start, forever.
+    #
+    # THE WHOLE THING IS WINDOWS-ONLY.  On Linux there is no UAC
+    # and no elevation, so there is nothing to check.
+    if sys.platform != "win32":
+        check("the elevation is Windows only (skipped)", True)
+        return
+
     started = []
     real_runas = elevate.shell_execute_runas
 
