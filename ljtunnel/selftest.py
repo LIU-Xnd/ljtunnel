@@ -330,15 +330,102 @@ def test_firewall():
     check("the firewall command allows tcp", "protocol=TCP" in cmd)
     check("the firewall command names the rule", FW.RULE_NAME in cmd)
 
+    # ---- the elevation itself ----
+    #
+    # The rule is added by asking Windows to run it as an
+    # administrator, and the PERSON answers the UAC prompt.  So the
+    # test cannot do it unattended -- but it CAN check that the
+    # machinery is there and that it is wired to the right thing.
     if sys.platform == "win32":
-        ok, msg = FW.add_rule()
-        if FW.is_admin():
-            check("the rule went in when elevated", ok, msg)
-        else:
-            check("without an administrator shell it says so, "
-                  "and gives the command",
-                  (not ok) and "administrator" in msg and
-                  "netsh" in msg, msg[:120])
+        check("the elevation is available", hasattr(FW, "_run_elevated"))
+        check("it starts the process as an administrator",
+              "runas" in (pathlib.Path(FW.__file__).read_text(
+                  encoding="utf-8")), "the runas verb is in the source")
+
+        # the answer comes back through a file, because the elevated
+        # process is detached and its exit code is not ours to read
+        check("the answer comes back through a file",
+              hasattr(FW, "_result_file"))
+        check("and the file is in the temporary directory",
+              "temp" in FW._result_file().lower() or
+              "tmp" in FW._result_file().lower(),
+              FW._result_file())
+
+        # the script the elevated process runs writes the answer
+        # AND does the work: both, in one string
+        script = FW.elevated_script("netsh advfirewall firewall show rule")
+        check("the elevated script does the work",
+              "netsh" in script, script[:80])
+        check("and writes the answer", "LJT_FW_RESULT" in script,
+              script[:120])
+        check("and exits with the command's own code",
+              "LASTEXITCODE" in script, script[:120])
+
+        # THE QUOTING IS THE WHOLE THING.
+        #
+        # The script becomes the -Command argument of powershell.exe,
+        # and that argument is inside DOUBLE quotes.  So a double
+        # quote anywhere in the script ends the argument early, and
+        # the rest of the script is run as something else.
+        #
+        # And inside the script, the strings are SINGLE-quoted, so a
+        # single quote inside one of them ends that string.  The
+        # netsh arguments are therefore quoted with single quotes,
+        # and there is no double quote at all.
+        body = ("netsh advfirewall firewall add rule name='ljtunnel' "
+                "inbound dir=in action=allow protocol=TCP "
+                "localport=10001,10002-10021 "
+                "program='C:\\Program Files\\OpenSSH\\sshd.exe'")
+        check("the netsh command inside the script has no double quote",
+              '"' not in body, body[:80])
+        check("and every single quote in it closes a string",
+              body.count("'") % 2 == 0 and body.count("'") == 4,
+              f"{body.count(chr(39))} single quotes")
+
+        # the whole script: the double quotes it carries are the ones
+        # the command line puts around it, and the ones PowerShell
+        # uses -- so the count is fixed
+        script2 = FW.elevated_script(body)
+        check("the script has no double quote of its own",
+              script2.count('"') == 0, f"{script2.count(chr(34))} of them")
+        check("and every single quote in it closes a string",
+              script2.count("'") % 2 == 0,
+              f"{script2.count(chr(39))} single quotes")
+
+        # and the command line it becomes is well formed
+        command = f'powershell.exe -NoProfile -NonInteractive -Command "{script2}"'
+        check("the command line has exactly two double quotes",
+              command.count('"') == 2, f"{command.count(chr(34))} of them")
+        check("and the script is between them",
+              command.index('"') < command.index(script2) <
+              command.rindex('"'), command[:80])
+
+        # the rule, if it is already there, is found
+        check("the rule's presence can be checked",
+              isinstance(FW.rule_exists(), bool))
+
+        # The rule is NOT added here.  add_rule() raises the UAC
+        # prompt, and a self-test that puts a prompt on somebody's
+        # screen every time they run the suite is a self-test that
+        # gets skipped.  The prompt path has its own test:
+        # ljtunnel.elevate_test, and ljtunnel.firewall_test.
+        #
+        # What is checked here is that the two paths AGREE: the rule
+        # is added with the cmdlet, and the cmdlet is what the
+        # firewall console shows.
+        check("the rule is added with the cmdlet",
+              "New-NetFirewallRule" in FW.netsh_add_body(),
+              FW.netsh_add_body()[:80])
+        check("and the old one goes first, so the button is safe to "
+              "press twice",
+              "Remove-NetFirewallRule" in FW.netsh_add_body(),
+              FW.netsh_add_body()[:80])
+        check("and it is removed with the cmdlet",
+              "Remove-NetFirewallRule" in FW.netsh_delete_body(),
+              FW.netsh_delete_body()[:80])
+        check("and the rule's name is the display name",
+              FW.RULE_NAME in FW.netsh_add_body(),
+              FW.netsh_add_body()[:80])
 
 
 # ---------------------------------------------------------------- dispatcher
@@ -881,6 +968,51 @@ def test_no_internal_addresses():
           ", ".join(bad[:8]))
 
 
+# --------------------------------------------------------- the elevation
+
+def test_elevation():
+    """The elevation, and what it needs.
+
+    The app asks to be an administrator when it starts, so the
+    firewall rule needs no prompt of its own.  The UAC prompt is the
+    person's confirmation, and it is asked ONCE.
+
+    What is checked here is the machinery, not the prompt: a prompt
+    cannot be answered by a test, and ljtunnel.elevate_test asks the
+    question with a person in the loop.
+    """
+    from ljtunnel import elevate
+
+    check("the elevation is available",
+          hasattr(elevate, "shell_execute_runas"))
+    check("the app can start itself again",
+          hasattr(elevate, "relaunch_elevated"))
+    check("and it says whether it did",
+          isinstance(elevate.is_admin(), bool))
+
+    if sys.platform == "win32":
+        check("the PowerShell is a real file",
+              os.path.isfile(elevate.POWERSHELL), elevate.POWERSHELL)
+        check("and it is the full path",
+              os.path.isabs(elevate.POWERSHELL), elevate.POWERSHELL)
+
+        # a prompt that says "No" is ERROR_CANCELLED, and that is a
+        # thing that happened rather than a failure
+        check("a declined prompt is told apart from an error",
+              elevate.ERROR_CANCELLED == 1223,
+              str(elevate.ERROR_CANCELLED))
+
+    # the window asks for the elevation at the START, so the rule
+    # needs no prompt of its own later
+    src = pathlib.Path(elevate.__file__).read_text(encoding="utf-8")
+    check("the elevation is in its own module", "runas" in src,
+          "the runas verb is there")
+    app_src = (pathlib.Path(__file__).resolve().parent / "app.py").read_text(
+        encoding="utf-8")
+    check("and the window asks for it at the start",
+          "relaunch_elevated" in app_src, "app.py asks for it")
+
+
 # ------------------------------------------------------- the command
 
 def test_command():
@@ -951,7 +1083,8 @@ def main() -> int:
                test_allocator, test_port_in_use, test_firewall,
                test_dispatcher, test_console, test_address, test_version,
                test_app, test_detect, test_detect_live, test_permit_listen,
-               test_records, test_command, test_no_internal_addresses):
+               test_records, test_command, test_no_internal_addresses,
+               test_elevation):
         try:
             fn()
         except Exception as e:                   # noqa: BLE001

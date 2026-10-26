@@ -38,14 +38,14 @@ from tkinter import messagebox, ttk
 
 try:
     import ljtunnel.listen as L
-    from ljtunnel import detect, firewall as FW
+    from ljtunnel import detect, elevate, firewall as FW
     from ljtunnel import paths, records, sshd
 except ImportError:                     # running from a source tree
     _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _PARENT not in sys.path:
         sys.path.insert(0, _PARENT)
     import ljtunnel.listen as L
-    from ljtunnel import detect, firewall as FW
+    from ljtunnel import detect, elevate, firewall as FW
     from ljtunnel import paths, records, sshd
 
 APP_TITLE = "ljtunnel listen"
@@ -70,6 +70,8 @@ class App(tk.Tk):
         self.listener = L.Listener()
 
         self._build()
+        self.admin_var.set("administrator" if elevate.is_admin()
+                           else "not an administrator")
         self._after_ids = set()
         self._after_ids.add(self.after(120, self._drain))
         self._after_ids.add(self.after(POLL_MS, self._poll))
@@ -102,14 +104,22 @@ class App(tk.Tk):
         ttk.Label(top, textvariable=self.fw_var).grid(
             row=0, column=5, sticky="w", padx=(8, 0))
 
+        # Whether the app is an administrator.  It says so, because
+        # "the firewall rule is not in" and "this app cannot add it"
+        # are different problems and a person needs to know which.
+        self.admin_var = tk.StringVar(value="")
+        ttk.Label(top, text="rights").grid(row=1, column=0, sticky="w",
+                                           pady=(4, 0))
+        ttk.Label(top, textvariable=self.admin_var).grid(
+            row=1, column=1, sticky="w", padx=(8, 20), pady=(4, 0))
+
         self.btn = ttk.Button(top, text="Start", command=self._toggle)
         self.btn.grid(row=0, column=6, sticky="e", padx=(20, 0))
         top.columnconfigure(5, weight=1)
 
         # -- the firewall command, when it is needed ----------------
         self.fw_frame = ttk.LabelFrame(
-            outer, text="The firewall needs one rule (administrator shell)",
-            padding=8)
+            outer, text="The firewall needs one rule", padding=8)
         self.fw_frame.pack(fill="x", pady=(pad, 0))
 
         self.fw_text = tk.Text(self.fw_frame, height=3, wrap="none",
@@ -119,8 +129,7 @@ class App(tk.Tk):
         self.fw_text.configure(state="disabled")
 
         ttk.Label(self.fw_frame,
-                  text="Run this in a terminal running as administrator. "
-                       "Until it is done, the dialers time out with no "
+                  text="Until the rule is in, the dialers time out with no "
                        "message at all.").pack(anchor="w", pady=(6, 0))
 
         # -- the dialers, and the form that records them -------------
@@ -221,6 +230,8 @@ class App(tk.Tk):
                     self._failed(payload)
                 elif kind == "log":
                     self._append(payload)
+                elif kind == "firewall":
+                    self._firewall_done(*payload)
         except queue.Empty:
             pass
         if not self._closed:
@@ -509,27 +520,69 @@ class App(tk.Tk):
                      f"<user>@{L.local_ipv4()}")
 
     def _open_firewall(self):
-        """Try to open the ports.
+        """Open the ports.
 
-        Adding a firewall rule is an administrator action, and this
-        program does not elevate itself. So it tries, and when it
-        cannot, it says what to run instead -- which is more use than
-        "access denied" and nothing else.
+        If the app is ALREADY an administrator, the rule goes in
+        with no prompt at all: the app asked to be an administrator
+        when it started, and the person answered that prompt once.
+
+        If it is not -- the person declined the prompt at start-up,
+        or the app is running from a source tree -- then THIS step
+        asks for it, and the UAC prompt appears here.  So declining
+        at the start is not a dead end: the rule is still one click
+        and one "Yes" away.
+
+        The window is not blocked while it waits: the prompt is
+        MODAL to the elevated process, not to this one, so the person
+        can carry on with the window while they decide.
         """
-        ok, msg = FW.add_rule()
+        if elevate.is_admin():
+            self._append("the firewall: adding the rule ...")
+            self.fw_var.set("adding the rule ...")
+        else:
+            self._append("the firewall: asking for the UAC prompt ...")
+            self.fw_var.set("waiting for the UAC prompt ...")
+
+        def work():
+            # Not on the main thread: the elevation starts a process
+            # and waits for it to write its answer, and the window
+            # has to stay alive while that happens.
+            ok, msg = FW.add_rule()
+            self.events.put(("firewall", (ok, msg)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _firewall_done(self, ok, msg):
+        """The firewall rule is in, or it is not.
+
+        Either way the window says which, because "nothing happened"
+        is not a state a person can act on.
+        """
         self._append("the firewall: " + msg.replace("\n", " "))
         if ok:
             self.fw_var.set(f"the rule is in ({FW.port_spec()})")
-        else:
-            self.fw_var.set("NOT in -- needs an administrator shell")
-            self.clipboard_clear()
-            self.clipboard_append(FW.netsh_command())
+            return
+        self.fw_var.set("NOT in")
+        if "declined" in msg:
+            # the person said no.  That is an answer, not a failure,
+            # so it is not dressed up as one.
             messagebox.showinfo(
                 APP_TITLE,
-                "The firewall rule needs an administrator shell.\n\n"
-                "The command has been copied to the clipboard -- paste it "
-                "into a terminal running as administrator.\n\n"
-                + FW.netsh_command())
+                "The UAC prompt was declined, so the firewall rule is "
+                "not in.\n\n"
+                "Until it is, the dialers time out with no message at "
+                "all.")
+            return
+        # it did not work, and the reason is not that the person said
+        # no: so the command is the way forward
+        self.clipboard_clear()
+        self.clipboard_append(FW.netsh_command())
+        messagebox.showinfo(
+            APP_TITLE,
+            "The firewall rule did not go in.\n\n"
+            "The command has been copied to the clipboard -- paste it "
+            "into a terminal running as administrator.\n\n"
+            + FW.netsh_command())
 
     def _copy_fw_cmd(self):
         self.clipboard_clear()
@@ -692,6 +745,46 @@ def _install_sigint(app) -> None:
 
 
 def main(argv=None) -> int:
+    """Run the window, as an administrator if it can be.
+
+    THE APP IS AN ADMINISTRATOR, so the firewall rule needs no
+    prompt of its own.
+
+    The window needs administrator rights for exactly one thing: the
+    firewall rule.  Windows blocks inbound connections to a port it
+    has not been told about, and it does it SILENTLY -- the dialer
+    times out with no error on either side and nothing says
+    "firewall".
+
+    So the app asks to be an administrator ONCE, at the start, rather
+    than asking every time the rule is needed.  The UAC prompt
+    appears once, the person answers it once, and the firewall
+    button does its work with no prompt at all afterwards.
+
+    A person who presses "No" gets the app WITHOUT the elevation,
+    and the firewall button then asks for it on its own, for that
+    one step.  So declining is not a dead end.
+    """
+    if sys.platform == "win32" and not elevate.is_admin():
+        started, why = elevate.relaunch_elevated(argv)
+        if started:
+            # The elevated copy is running now.  This one has to go:
+            # two windows would be two panels showing the same state,
+            # and this one cannot do the work.
+            return 0
+        # The person said no, or the elevation did not happen.  Carry
+        # on without it: the firewall button asks for it on its own.
+        if why == "the UAC prompt was declined":
+            print("the UAC prompt was declined -- the firewall rule "
+                  "will ask for the elevation by itself", file=sys.stderr)
+        else:
+            print("could not run as an administrator: " + why,
+                  file=sys.stderr)
+
+    return _run_window(argv)
+
+
+def _run_window(argv=None) -> int:
     """Run the window.
 
     The dispatcher calls every subcommand's main() with the remaining

@@ -154,16 +154,31 @@ and it does it **silently**: the connection times out, with no error on
 either side. The listen end needs an inbound rule for `10001` and for
 the forwarded range.
 
-Adding a firewall rule is an administrator action, so the window shows
-the command and offers it for copying. To run it yourself:
+Adding a firewall rule is an administrator action, so the app **asks
+to be an administrator when it starts**. Windows puts up the UAC
+prompt, you answer it, and the app is an administrator for as long as
+it is open -- so the firewall button needs no prompt of its own
+afterwards.
+
+Press **No** and the app carries on without the elevation. The
+firewall button then asks for it by itself, for that one step. So
+declining is not a dead end.
+
+The rule is added with `New-NetFirewallRule`, and not with `netsh`:
+netsh says "the specified value is invalid" for a dozen different
+reasons -- including *not being an administrator* -- so the thing
+that went wrong cannot be told from the message. The cmdlet says
+"access is denied" with the exception type beside it.
+
+Until the rule is in, the dialers time out with no message at all.
+
+If you would rather do it by hand:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/open_firewall.ps1
 ```
 
 from a terminal running as administrator.
-
-Until the rule is in, the dialers time out with no message at all.
 
 ## Commands
 
@@ -190,7 +205,13 @@ it. The dialer end is a script and needs Python 3.9 or later.
 python -m ljtunnel.selftest      # the checks that need one machine
 python -m ljtunnel.guitest        # the window, without showing it
 python -m ljtunnel.interrupt_test # Ctrl-C, really interrupted
+python -m ljtunnel.elevate_test   # the UAC prompt, really answered
+python -m ljtunnel.firewall_test  # the rule, really added
 ```
+
+The last two put a UAC prompt on your screen. They are separate from
+the self-test on purpose: a suite that raises a prompt every time it
+runs is a suite that gets skipped.
 
 The interrupt test sends a real console event to a real process and
 checks the port afterwards, because a program that is killed with the
