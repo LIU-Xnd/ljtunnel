@@ -138,9 +138,35 @@ def netsh_add_body() -> str:
     PowerShell's own, a single-quoted string is a string, and a path
     with spaces in it is one.
     """
+    # THE REMOVAL MUST NOT BE SILENT.
+    #
+    # With -ErrorAction SilentlyContinue a removal that FAILS is
+    # swallowed, the script carries on, and the new rule is added
+    # beside the old one.  Press the button twice and there are two
+    # rules; press it five times and there are five.  They all do the
+    # same thing and the firewall console shows a list of identical
+    # entries.
+    #
+    # So the removal is checked, and a removal that did not happen
+    # STOPS the script: no new rule is added, and the answer says
+    # why.
+    #
+    # Remove-NetFirewallRule with -DisplayName takes EVERY rule with
+    # that name, so this also cleans up what earlier versions left
+    # behind.
+    #
+    # IT THROWS, IT DOES NOT EXIT.  An `exit` in the middle of the
+    # body skips the writing of the answer file, so the caller gets
+    # no explanation at all -- it just finds nothing there.  A
+    # `throw` is caught by the script around the body, and the
+    # answer file IS written, with the reason in it.
     return (
+        "try { "
         f"Remove-NetFirewallRule -DisplayName '{RULE_NAME}' "
-        f"-ErrorAction SilentlyContinue; "
+        "-ErrorAction Stop; "
+        "} catch { "
+        "throw ('could not remove the old rule: ' + $_.Exception.Message); "
+        "}; "
         f"New-NetFirewallRule -DisplayName '{RULE_NAME}' "
         f"-Direction Inbound -Action Allow -Protocol TCP "
         f"-LocalPort {port_spec()} "
@@ -150,9 +176,21 @@ def netsh_add_body() -> str:
 
 
 def netsh_delete_body() -> str:
-    """The PowerShell that removes the rule."""
-    return (f"Remove-NetFirewallRule -DisplayName '{RULE_NAME}' "
-            f"-ErrorAction SilentlyContinue")
+    """The PowerShell that removes the rule.
+
+    IT REPORTS WHAT WENT WRONG.  With -ErrorAction
+    SilentlyContinue a removal that failed is swallowed, and the
+    caller is told the rule is gone when it is not.  So the error
+    is caught and the exit code says so.
+    """
+    return (
+        "try { "
+        f"Remove-NetFirewallRule -DisplayName '{RULE_NAME}' "
+        "-ErrorAction Stop; "
+        "} catch { "
+        "throw ('could not remove the rule: ' + $_.Exception.Message); "
+        "}"
+    )
 
 
 def netsh_command() -> str:
@@ -263,10 +301,21 @@ def elevated_script(body: str, result_path: str = "") -> str:
     # And the answer is a line that starts with "exit=", so the
     # reader can find the code without knowing anything about the
     # rest of it.
+    # A `throw` INSIDE the body is caught here, and the answer file
+    # is still written -- with the reason in it.  So a failure the
+    # body reports is a failure the caller can read, and the work
+    # that was NOT done is not done.
     return (
         "$ErrorActionPreference = 'Continue'\n"
-        f"$o = & {{ {body} }} 2>&1 | Out-String\n"
-        "$r = $LASTEXITCODE\n"
+        "$o = ''\n"
+        "$r = 0\n"
+        "try {\n"
+        f"  $o = & {{ {body} }} 2>&1 | Out-String\n"
+        "  $r = $LASTEXITCODE\n"
+        "} catch {\n"
+        "  $o = $_.Exception.Message\n"
+        "  $r = 1\n"
+        "}\n"
         "if ($null -eq $r) { $r = 0 }\n"
         f"('exit=' + $r + ' ' + $o.Trim()) | Out-File -FilePath {out} "
         "-Encoding ascii\n"

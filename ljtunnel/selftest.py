@@ -827,6 +827,46 @@ def test_detect_live():
                                     for x in reg2.snapshot()]))
 
 
+def test_firewall_body():
+    """The firewall rule is put in, and the old one goes away FIRST.
+
+    THE REMOVAL MUST NOT BE SILENT.  With
+    -ErrorAction SilentlyContinue a removal that failed is swallowed,
+    the script carries on, and the new rule is added BESIDE the old
+    one.  Press the button twice and there are two rules; press it
+    five times and there are five.  They all do the same thing, and
+    the firewall console shows a list of identical entries.
+
+    So the removal is caught, and a removal that did not happen
+    STOPS the script: no new rule is added.
+    """
+    from ljtunnel import firewall
+
+    add_body = firewall.netsh_add_body()
+    del_body = firewall.netsh_delete_body()
+
+    check("the add body removes the old rule first",
+          "Remove-NetFirewallRule" in add_body, add_body[:90])
+    check("and the removal is NOT silent",
+          "-ErrorAction SilentlyContinue" not in add_body,
+          "the removal reports what went wrong")
+    check("the removal is caught",
+          "catch" in add_body and "exit 3" in add_body,
+          "a failed removal stops the script")
+    check("the removal comes BEFORE the addition",
+          add_body.index("Remove-NetFirewallRule")
+          < add_body.index("New-NetFirewallRule"),
+          "the old rule goes first")
+    check("and the delete body is not silent either",
+          "-ErrorAction SilentlyContinue" not in del_body
+          and "exit 3" in del_body, del_body[:90])
+
+    # and the body is one line, so it can be a -Command argument
+    # when it has to be
+    check("the body has no newline",
+          "\n" not in add_body, repr(add_body[:60]))
+
+
 def test_permit_listen():
     """The forward range is in the config, on ONE line."""
     from ljtunnel import sshd
@@ -1225,7 +1265,8 @@ def main() -> int:
                test_dispatcher, test_console, test_address, test_version,
                test_app, test_detect, test_detect_live, test_permit_listen,
                test_records, test_command, test_no_internal_addresses,
-               test_elevation):
+               test_records, test_command, test_no_internal_addresses,
+               test_firewall_body, test_elevation):
         try:
             fn()
         except Exception as e:                   # noqa: BLE001
