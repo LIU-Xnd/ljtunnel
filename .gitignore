@@ -22,3 +22,4 @@ id_rsa_ljtunnel_access.pub
 __pycache__/
 *.py[cod]
 *.bak
+_win_checks.txt
