@@ -32,7 +32,7 @@ import subprocess
 import sys
 import tempfile
 
-from . import __version__, firewall as FW, listen as L, paths, sshd
+from . import __version__, firewall as FW, listen as L, paths, records, sshd
 from . import listen
 from . import dialer as dialer_mod
 
@@ -522,9 +522,30 @@ def test_app():
         a = app.App()
         a.update_idletasks()
         check("the window builds", True)
-        check("the window has the dialer list", len(a.tree["columns"]) == 4)
+        eq("the window has the dialer list", len(a.tree["columns"]), 5)
+        eq("with the columns it shows",
+           tuple(a.tree["columns"]),
+           ("name", "port", "state", "where", "notes"))
         check("the window shows the firewall command",
               FW.netsh_command() in a.fw_text.get("1.0", "end"))
+
+        # ---- the form ----
+        #
+        # A form that is missing a field is a form that cannot
+        # record what it is supposed to record.  The five fields
+        # are: the name, the address, the user, the key, and the
+        # note.
+        for field in ("name_var", "host_var", "user_var", "key_var",
+                      "note_var"):
+            check(f"the form has a {field[:-4]}",
+                  hasattr(a, field), field)
+
+        # ---- and the ways out ----
+        for method in ("_save", "_forget", "_show_command",
+                       "_copy_selected"):
+            check(f"the window has {method}",
+                  callable(getattr(a, method, None)), method)
+
         a._on_close()
     except Exception as e:                       # noqa: BLE001
         check("the window builds", False, f"{type(e).__name__}: {e}")
@@ -537,12 +558,12 @@ def test_app():
 # is that the patterns match the real thing, and a made-up line
 # proves nothing.
 #
-# The address in them is 203.0.113.7 -- TEST-NET-3, which is reserved
+# The address in them is 192.0.2.7 -- TEST-NET-1, which is reserved
 # for documentation and is never routed.  The address that was really
 # there is not written down: an address in a test file is an address
 # somebody will copy, and it will be wrong.
 _LOG_ACCEPT = ("debug1: user: xnd_l: Accepted publickey for xnd_l from "
-               "203.0.113.7 port 48238 ssh2: ED25519 "
+               "192.0.2.7 port 48238 ssh2: ED25519 "
                "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c")
 _LOG_FORWARD = ("debug1: user: xnd_l: server_input_global_request: "
                 "tcpip-forward listen 0.0.0.0 port 20002 [postauth]")
@@ -655,7 +676,7 @@ def test_detect_live():
             # a SECOND dialer, with its own key, on the same port
             other = detect.Dialer(fingerprint="SHA256:someoneelse",
                                   name="box-b", port=port,
-                                  peer="203.0.113.7")
+                                  peer="192.0.2.7")
             reg3._seen["SHA256:someoneelse"] = other
         snap3 = reg3.snapshot()
         check("one port has one owner",
@@ -704,6 +725,94 @@ def test_permit_listen():
           (pl[0][:100] if pl else out[-120:]))
 
 
+# ---------------------------------------------------------------- records
+
+def test_records():
+    """The records: kept, replaced, and forgotten.
+
+    The records are the form's memory.  A record that is not written
+    out is a form that has to be filled in again every time, and a
+    record that is written badly is a form that cannot be read at
+    all -- so the file is written through a temporary one and
+    renamed, and the test reads it back the way the program does.
+    """
+    # the test does not touch the real records
+    tmp = tempfile.mkdtemp(prefix="ljt-records-")
+    real = records.records_path
+    records.records_path = lambda: os.path.join(tmp, "recs.json")
+    try:
+        records.save([])
+        eq("a record file starts empty", records.load(), [])
+
+        rec = records.add("box-a", "ssh-ed25519 AAAA test", "192.0.2.5",
+                          "someone", "the far one")
+        eq("the record is kept", len(records.load()), 1)
+        eq("with its name", rec["name"], "box-a")
+        eq("with its key", rec["pubkey"], "ssh-ed25519 AAAA test")
+        eq("with its address", rec["host"], "192.0.2.5")
+        eq("with its user", rec["user"], "someone")
+        eq("with its note", rec["note"], "the far one")
+
+        # ---- the file is real JSON, and it survives a reload ----
+        import json
+        with open(records.records_path(), encoding="utf-8") as fh:
+            raw = json.load(fh)
+        check("the file is JSON", isinstance(raw, list), str(type(raw)))
+        eq("with one record in it", len(raw), 1)
+
+        # ---- the same name REPLACES, it does not duplicate ----
+        records.add("box-a", "ssh-ed25519 AAAA test", "192.0.2.6", "", "")
+        eq("the same name does not duplicate", len(records.load()), 1)
+        eq("and the new address is the one that is kept",
+           records.by_name("box-a")["host"], "192.0.2.6")
+
+        # ---- a second record ----
+        records.add("box-b", "", "192.0.2.7")
+        eq("a second record is kept", len(records.load()), 2)
+        check("both names are there",
+              set(records.names()) == {"box-a", "box-b"},
+              str(records.names()))
+
+        # ---- and it can be forgotten ----
+        check("the record was there", records.remove("box-a"))
+        eq("one is left", len(records.load()), 1)
+        check("and it is the other one",
+              records.by_name("box-a") == {}, str(records.by_name("box-a")))
+        check("forgetting one that is not there says so",
+              not records.remove("box-a"))
+
+        # ---- a file that cannot be read is not a crash ----
+        with open(records.records_path(), "w", encoding="utf-8") as fh:
+            fh.write("this is not json")
+        eq("a broken file reads as no records", records.load(), [])
+
+        # ---- and the command ----
+        cmd = records.command_for({"name": "box-a", "host": "192.0.2.5",
+                                    "user": "someone", "pubkey": ""})
+        check("the command is a dialer command",
+              cmd.startswith("ljtunnel dialer"), cmd[:60])
+        check("it names the address", "192.0.2.5" in cmd, cmd[:100])
+        check("it names the user", "--user someone" in cmd, cmd[:100])
+        check("it names the listen port",
+              f"--listen-port {L.LISTEN_SSHD_PORT}" in cmd, cmd[:100])
+        check("it carries the access key", "ssh-ed25519" in cmd, cmd[:100])
+        check("it does NOT name a forward port",
+              "--forward-port" not in cmd,
+              "the dialer finds the port itself")
+        check("it carries NO private key",
+              "PRIVATE KEY" not in cmd and "id_rsa" not in cmd, cmd[:100])
+
+        # ---- a record with no address uses this end's own ----
+        cmd2 = records.command_for({"name": "box-b", "host": "", "user": "",
+                                     "pubkey": ""})
+        check("with no address it uses this end's own",
+              L.local_ipv4() in cmd2, cmd2[:100])
+    finally:
+        records.records_path = real
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ---------------------------------------------------------------- the run
 
 def main() -> int:
@@ -713,7 +822,8 @@ def main() -> int:
                test_dialer,
                test_allocator, test_port_in_use, test_firewall,
                test_dispatcher, test_console, test_address, test_version,
-               test_app, test_detect, test_detect_live, test_permit_listen):
+               test_app, test_detect, test_detect_live, test_permit_listen,
+               test_records):
         try:
             fn()
         except Exception as e:                   # noqa: BLE001

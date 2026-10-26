@@ -1,17 +1,22 @@
 """The listen end's window.
 
-A panel over the server: which dialers are connected, on which port,
-and a way to add and remove them. The panel IS the server -- the
-sshd, the key list and the port assignment are ljtunnel.listen's,
-imported and driven here, not reimplemented.
+A panel over the server: the dialers that are recorded, the ones that
+are here, and the command to run on a box.
 
-THE PANEL
----------
-One row per dialer:
+THE TWO THINGS
+--------------
+A RECORD is what somebody filled in: this dialer is called box-a, it
+is at this address, its key is this, and here is the command to run
+on it.  A record is kept whether or not the dialer is up.
 
-    name      the port it is on, who it is, whether the port is open
+A DIALER is what is actually there: a key authenticated and asked for
+a port, and that port is open.  The listen end works this out by
+itself, from the sshd's log and the socket table.
 
-and the buttons to add one, remove one, and stop everything.
+So a row can be a record with no dialer (the box is not running yet),
+a dialer with no record (it was let in before the records existed),
+or both.  The panel shows them together, because the two questions
+are different: "what did I set up" and "what is up right now".
 
 WHAT THE PANEL CANNOT DO
 ------------------------
@@ -33,15 +38,15 @@ from tkinter import messagebox, ttk
 
 try:
     import ljtunnel.listen as L
-    from ljtunnel import firewall as FW
-    from ljtunnel import paths, sshd
+    from ljtunnel import detect, firewall as FW
+    from ljtunnel import paths, records, sshd
 except ImportError:                     # running from a source tree
     _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _PARENT not in sys.path:
         sys.path.insert(0, _PARENT)
     import ljtunnel.listen as L
-    from ljtunnel import firewall as FW
-    from ljtunnel import paths, sshd
+    from ljtunnel import detect, firewall as FW
+    from ljtunnel import paths, records, sshd
 
 APP_TITLE = "ljtunnel listen"
 POLL_MS = 1000
@@ -56,15 +61,20 @@ class App(tk.Tk):
 
         self.events = queue.Queue()
         self.srv = None
+        self._closed = False
+        self._interrupted = False
+        self._records = {}
         # The dialers are NOT a list this end keeps.  They are what
         # the sshd's own log and the socket table say is there, and
         # they are read afresh every time the panel is drawn.
         self.listener = L.Listener()
 
         self._build()
-        self.after(120, self._drain)
-        self.after(POLL_MS, self._poll)
+        self._after_ids = set()
+        self._after_ids.add(self.after(120, self._drain))
+        self._after_ids.add(self.after(POLL_MS, self._poll))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        _install_sigint(self)
 
     # ------------------------------------------------------------ layout
 
@@ -113,42 +123,64 @@ class App(tk.Tk):
                        "Until it is done, the dialers time out with no "
                        "message at all.").pack(anchor="w", pady=(6, 0))
 
-        # -- the dialer, and the key that has to be moved by hand ----
+        # -- the dialers, and the form that records them -------------
         #
-        # There is nothing to ADD.  A dialer arrives, and the panel
-        # sees it.  The only thing that has to be moved by hand is the
-        # KEY: the dialer's public key goes in this end's key list, or
-        # the sshd will not let it in.
-        #
-        # The name is optional.  A key with no name shows up as its
-        # fingerprint, which is enough to tell two dialers apart.
-        add = ttk.LabelFrame(outer, text="Let a dialer in", padding=8)
+        # The form is for RECORDING a dialer: its name, where it is,
+        # who logs in, and its key.  What it does NOT do is decide
+        # which port the dialer gets -- the dialer finds a free one
+        # itself -- and it does not decide whether the dialer is up.
+        # The panel works that out by itself.
+        add = ttk.LabelFrame(outer, text="Record a dialer", padding=8)
         add.pack(fill="x", pady=(pad, 0))
 
-        ttk.Label(add, text="dialer's public key").grid(
-            row=0, column=0, sticky="w")
-        self.key_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.key_var).grid(
+        ttk.Label(add, text="name").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.name_var, width=14).grid(
             row=0, column=1, sticky="w", padx=(4, 12))
 
-        ttk.Label(add, text="name (optional)").grid(row=0, column=2, sticky="w")
-        self.name_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.name_var, width=12).grid(
+        ttk.Label(add, text="address").grid(row=0, column=2, sticky="w")
+        self.host_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.host_var, width=16).grid(
             row=0, column=3, sticky="w", padx=(4, 12))
 
-        ttk.Button(add, text="Let it in", command=self._add).grid(
-            row=0, column=4, sticky="e")
+        ttk.Label(add, text="user").grid(row=0, column=4, sticky="w")
+        self.user_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.user_var, width=10).grid(
+            row=0, column=5, sticky="w", padx=(4, 12))
+
+        ttk.Label(add, text="dialer's public key").grid(
+            row=1, column=0, sticky="w", pady=(6, 0))
+        self.key_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.key_var).grid(
+            row=1, column=1, columnspan=5, sticky="ew", padx=(4, 12),
+            pady=(6, 0))
+
+        ttk.Label(add, text="notes").grid(row=2, column=0, sticky="w",
+                                          pady=(6, 0))
+        self.note_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.note_var).grid(
+            row=2, column=1, columnspan=5, sticky="ew", padx=(4, 12),
+            pady=(6, 0))
+
+        buttons = ttk.Frame(add)
+        buttons.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        ttk.Button(buttons, text="Save", command=self._save).pack(side="left")
+        ttk.Button(buttons, text="Show the command",
+                   command=self._show_command).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Forget",
+                   command=self._forget).pack(side="left")
         add.columnconfigure(1, weight=1)
+        add.columnconfigure(3, weight=1)
 
         # -- the panel ----------------------------------------------
         mid = ttk.LabelFrame(outer, text="Dialers", padding=6)
         mid.pack(fill="both", expand=True, pady=(pad, 0))
 
-        cols = ("name", "port", "who", "state")
+        cols = ("name", "port", "state", "where", "notes")
         self.tree = ttk.Treeview(mid, columns=cols, show="headings",
                                   height=10)
-        for col, width in (("name", 140), ("port", 80),
-                           ("who", 220), ("state", 120)):
+        for col, width in (("name", 130), ("port", 60),
+                           ("state", 90), ("where", 150), ("notes", 180)):
             self.tree.heading(col, text=col)
             self.tree.column(col, width=width, anchor="w")
         sb = ttk.Scrollbar(mid, orient="vertical",
@@ -159,15 +191,14 @@ class App(tk.Tk):
 
         row = ttk.Frame(outer)
         row.pack(fill="x", pady=(pad, 0))
-        ttk.Button(row, text="Remove", command=self._remove).pack(side="left")
-        ttk.Button(row, text="Copy the dialer command",
-                   command=self._copy_dialer_cmd).pack(side="left", padx=6)
+        ttk.Button(row, text="Copy the command",
+                   command=self._copy_selected).pack(side="left")
         ttk.Button(row, text="Copy the access key path",
-                   command=self._copy_access_path).pack(side="left")
+                   command=self._copy_access_path).pack(side="left", padx=6)
         ttk.Button(row, text="Open the firewall",
-                   command=self._open_firewall).pack(side="left", padx=6)
+                   command=self._open_firewall).pack(side="left")
         ttk.Button(row, text="Copy the firewall command",
-                   command=self._copy_fw_cmd).pack(side="left")
+                   command=self._copy_fw_cmd).pack(side="left", padx=6)
 
         # -- the log ------------------------------------------------
         self.log = tk.Text(outer, wrap="word", height=8, state="disabled",
@@ -189,12 +220,19 @@ class App(tk.Tk):
                     self._append(payload)
         except queue.Empty:
             pass
-        self.after(120, self._drain)
+        if not self._closed:
+            self._after_ids.add(self.after(120, self._drain))
 
     def _poll(self):
-        """Keep the panel current."""
+        """Keep the panel current, and notice a Ctrl-C."""
+        if self._closed:
+            return
+        if self._interrupted:
+            self._append("Ctrl-C: stopping ...")
+            self._on_close()
+            return
         self._refresh()
-        self.after(POLL_MS, self._poll)
+        self._after_ids.add(self.after(POLL_MS, self._poll))
 
     # ------------------------------------------------------------ the server
 
@@ -272,66 +310,142 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ dialers
 
-    def _add(self):
-        """Let a dialer's key in.
+    def _save(self):
+        """Record the dialer the form describes.
 
-        The only thing that has to be done by hand is the KEY: the
-        dialer's public key goes in this end's key list, or the sshd
-        will not let it in.  Everything else -- which port it gets,
-        whether it is there at all -- the listen end works out for
-        itself.
+        The record says what this dialer IS: its name, where it is,
+        who logs in, and its key.  It does not say which port it gets
+        -- the dialer finds a free one -- and it does not say whether
+        it is up: the panel works that out by itself.
+
+        The key, if there is one, goes into this end's key list, so
+        the dialer is let in.  A record with no key is still a record:
+        it is a box that has not been set up yet, and the command
+        that sets it up is what the panel prints.
         """
-        key = self.key_var.get().strip()
         name = self.name_var.get().strip()
-        if not key:
+        host = self.host_var.get().strip()
+        user = self.user_var.get().strip()
+        key = self.key_var.get().strip()
+        note = self.note_var.get().strip()
+
+        if not name and not host and not key:
             messagebox.showerror(APP_TITLE,
-                                 "paste the dialer's public key")
+                                 "a record needs at least a name")
             return
-        # a key with a name is one line; a key without one is still
-        # one key, and the panel shows its fingerprint
-        L.add_key(key, name)
-        self._append(f"the key is in the list"
-                     + (f", named {name}" if name else ""))
-        self.key_var.set("")
-        self.name_var.set("")
+
+        rec = records.add(name or key[:24], key, host, user, note)
+        if key:
+            L.add_key(key, rec["name"])
+            self._append(f"the key is in the list, named {rec['name']}")
+        self._append(f"recorded {rec['name']}")
+        self._append(f"  the command it runs:")
+        self._append(f"    {records.command_for(rec)}")
         self._refresh()
 
-    def _remove(self):
-        """Take a dialer's key out of the list.
+    def _forget(self):
+        """Forget the selected record, and take its key out of the list.
 
         The dialer is not stopped by this -- it is a dialer on the
         other machine, and the only thing that stops it is the
         person who runs it.  What this does is stop it being let in
-        again, and take its name off the panel.
+        again, and take it off the panel.
         """
         sel = self.tree.selection()
         if not sel:
+            messagebox.showerror(APP_TITLE, "pick a row first")
             return
         iid = sel[0]
-        fp = self._fingerprints.get(iid, "")
-        if fp:
-            L.remove_key(fp)
-            self._append(f"the key {fp[:24]} is out of the list")
+        rec = self._records.get(iid)
+        if not rec:
+            return
+        if rec.get("pubkey"):
+            L.remove_key(detect._fingerprint_of(rec["pubkey"]))
+        records.remove(rec["name"])
+        self._append(f"forgotten {rec['name']}")
         self._refresh()
 
-    def _refresh(self):
-        """Redraw the panel from what the listen end can SEE.
+    def _show_command(self):
+        """Show the command the recorded dialer runs.
 
-        The dialers are not a list this end keeps: they are read from
-        the sshd's log and the socket table, and a dialer that has
-        gone leaves its lines in the log and no socket.  So a row is
-        here exactly while the port is open.
+        The command is for the dialer to RUN, on the other machine.
+        It is shown in the log, and it is copied to the clipboard, so
+        it can be pasted into a terminal over there.
+        """
+        rec = self._form_record()
+        cmd = records.command_for(rec)
+        self.clipboard_clear()
+        self.clipboard_append(cmd)
+        self._append(f"the command for {rec['name']}:")
+        self._append(f"  {cmd}")
+        self._append("  (copied -- paste it on the dialer machine)")
+
+    def _copy_selected(self):
+        """The command for the SELECTED row, copied.
+
+        The clipboard is the point: the command is run on another
+        machine, and the fastest way to get it there is to paste it.
+        """
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showerror(APP_TITLE, "pick a row first")
+            return
+        rec = self._records.get(sel[0])
+        if not rec:
+            return
+        cmd = records.command_for(rec)
+        self.clipboard_clear()
+        self.clipboard_append(cmd)
+        self._append(f"copied the command for {rec['name']}")
+        self._append(f"  {cmd}")
+
+    def _form_record(self) -> dict:
+        """The record the form describes, with the form's values."""
+        name = self.name_var.get().strip()
+        return {
+            "name": name or "a dialer",
+            "host": self.host_var.get().strip(),
+            "user": self.user_var.get().strip(),
+            "pubkey": self.key_var.get().strip(),
+            "note": self.note_var.get().strip(),
+        }
+
+    def _refresh(self):
+        """Redraw the panel: the records, and the dialers that are up.
+
+        The two are joined by NAME.  A record whose name is on a live
+        dialer is that dialer; a record with no live dialer is a box
+        that is not running yet; a live dialer with no record is one
+        that was let in before the records existed, and it is shown
+        under its fingerprint.
         """
         want = {}
-        self._fingerprints = {}
+        self._records = {}
+
+        # the dialers that are up, by name
+        live = {}
         for d in self.listener.dialers():
-            iid = d.label or d.fingerprint
-            # two dialers with the same name would collide in the
-            # tree, so the fingerprint is always part of the id
-            iid = f"{iid} {d.fingerprint[-6:]}" if d.name else d.fingerprint
-            self._fingerprints[iid] = d.fingerprint
-            want[iid] = (d.name or d.fingerprint[-12:], str(d.port),
-                         d.peer, "open")
+            live[d.name or d.fingerprint] = d
+
+        # the records first: a record is a row whether or not its
+        # dialer is here
+        for rec in records.load():
+            name = rec.get("name") or rec.get("pubkey", "")[:24]
+            d = live.pop(name, None)
+            self._records[name] = rec
+            want[name] = (
+                name,
+                str(d.port) if d else "",
+                "up" if d else "not up",
+                rec.get("host") or (d.peer if d else ""),
+                rec.get("note", ""),
+            )
+
+        # and then the live dialers with no record
+        for key, d in live.items():
+            self._records[key] = {"name": key, "pubkey": "",
+                                   "host": d.peer, "user": "", "note": ""}
+            want[key] = (key, str(d.port), "up", d.peer, "")
 
         have = {iid: tuple(self.tree.item(iid, "values"))
                 for iid in self.tree.get_children()}
@@ -423,8 +537,9 @@ class App(tk.Tk):
         self.log.see("end-1c")
         self.log.configure(state="disabled")
 
-    def _on_close(self):
-        """The window is closing: take the server down with it.
+    def _stop_server(self):
+        """Stop the sshd.  This does not touch Tk, so it is safe from
+        any thread.
 
         The sshd is a child of this process, so it would die with the
         process -- but the window can close while the process lives
@@ -439,7 +554,134 @@ class App(tk.Tk):
                 pass
         self.srv = None
         sshd.stop()
-        self.destroy()
+
+    def _on_close(self):
+        """The window is closing: take the server down with it.
+
+        The shutdown is done ONCE.  The window can be closed by the
+        X, by Ctrl-C, or by the program being asked to quit, and two
+        of those can happen at the same time: the second one would
+        find a half-stopped server and the port would still be held.
+
+        destroy() alone is NOT enough.  A window that is destroyed
+        from inside an after() callback leaves the main loop RUNNING:
+        the callbacks are all gone, so the loop has nothing to do and
+        spins without ever returning.  So the loop is asked to QUIT
+        as well.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        self._stop_server()
+
+        # the after() callbacks are cancelled, so the poll does not
+        # carry on against a window that is going away
+        for _id in list(self._after_ids):
+            try:
+                self.after_cancel(_id)
+            except Exception:
+                pass
+        self._after_ids = set()
+
+        try:
+            self.quit()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+    def _on_sigint(self, signum, frame):
+        """Ctrl-C was pressed.
+
+        The handler does NOTHING but raise a flag.  Tk's own calls
+        are not safe from a signal handler: the handler runs between
+        two bytecodes, and calling into Tk then can leave the
+        toolkit in a state it does not expect.  So the flag is
+        noticed by the poll, which runs in the main loop where
+        calling Tk is what it is for.
+
+        Without this, Ctrl-C kills the process where it stands: the
+        sshd is a child, so it would go too, but the ports it had are
+        not released cleanly and the next launch finds a port that is
+        busy for no reason anybody can see.
+        """
+        self._interrupted = True
+
+
+def _install_sigint(app) -> None:
+    """Make Ctrl-C close the window, cleanly.
+
+    There is no console in the Windows launcher, so Ctrl-C is not
+    something a person presses there.  But the console launcher is
+    the same program, and on Linux the window is not used at all.
+
+    THE SIGNAL HANDLER ITSELF DOES NOTHING BUT SET A FLAG.
+
+    Tk's own calls are not safe from a signal handler: the handler
+    runs between two bytecodes of the main thread, and calling into
+    the toolkit from there can leave it in a state it does not
+    expect.  It is worse than that on Windows, where a Ctrl-C
+    arrives as a console event that Python turns into a SIGINT on
+    the main thread -- and the main thread is inside the Tk event
+    loop, not at a bytecode boundary where a handler is welcome.
+
+    So a THREAD waits for the flag and does the work.  The thread is
+    the one thing that can touch the server and the toolkit safely
+    enough, and the main loop is left to notice that it is time to
+    stop.
+    """
+    import signal
+    import threading
+
+    def _handler(signum, frame):
+        # Nothing is called here.  A flag, and nothing else.
+        app._interrupted = True
+
+    try:
+        signal.signal(signal.SIGINT, _handler)
+    except (ValueError, OSError, AttributeError):
+        # Not the main thread, or the platform has no SIGINT.
+        pass
+
+    # SIGBREAK is the Windows BREAK.  A process in its own process
+    # group IGNORES a console Ctrl-C, so the break is the event it
+    # actually gets -- and a program that is launched with its own
+    # console is in its own group.
+    #
+    # Python's default handler for it raises KeyboardInterrupt, so
+    # without this it would work by accident.  It is handled
+    # explicitly because "by accident" is not a decision.
+    if hasattr(signal, "SIGBREAK"):
+        try:
+            signal.signal(signal.SIGBREAK, _handler)
+        except (ValueError, OSError, AttributeError):
+            pass
+
+    if not hasattr(signal, "SIGINT"):
+        return
+
+    def _watch():
+        while not app._closed:
+            if app._interrupted:
+                app._interrupted = False
+                try:
+                    # The server is stopped HERE, on this thread: it
+                    # does not touch Tk, so it is safe.  The window
+                    # is closed by the MAIN LOOP, which is the only
+                    # thread allowed to touch the toolkit.
+                    app._stop_server()
+                    app.after(0, app._on_close)
+                except Exception:
+                    pass
+                return
+            time.sleep(0.2)
+
+    t = threading.Thread(target=_watch, daemon=True,
+                         name="ljtunnel-sigint")
+    t.start()
 
 
 def main(argv=None) -> int:

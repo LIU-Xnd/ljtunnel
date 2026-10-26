@@ -21,7 +21,7 @@ THE LOG
 -------
 The listen end's sshd writes a line per event.  The two that matter:
 
-    Accepted publickey for xnd_l from 203.0.113.7 port 35536 ssh2:
+    Accepted publickey for xnd_l from 192.0.2.7 port 35536 ssh2:
         ED25519 SHA256:xht76GglXU2cFU/...
 
     debug1: user: xnd_l: server_input_global_request: rtype
@@ -67,7 +67,7 @@ from dataclasses import dataclass, field
 # identifies the dialer: the key TEXT is long and the fingerprint is
 # short, and the fingerprint is what sshd itself prints.
 #
-# The address in the example below is 203.0.113.7 -- TEST-NET-3, which
+# The address in the example below is 192.0.2.7 -- TEST-NET-1, which
 # is reserved for documentation and is never routed.  The address that
 # was really there is not written down: an address in a source file is
 # an address somebody will copy, and it will be wrong.

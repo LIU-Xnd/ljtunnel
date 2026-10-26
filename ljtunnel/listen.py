@@ -60,7 +60,7 @@ import subprocess
 import sys
 import time
 
-from . import detect, paths, sshd
+from . import detect, paths, records, sshd
 
 # The port this end's own sshd listens on. The dialers log in here.
 LISTEN_SSHD_PORT = 10001
@@ -434,7 +434,8 @@ def main(argv=None) -> int:
     sshd.ensure_client_key()
     sshd.set_authorized_keys(read_keys())
 
-    srv = start_sshd()
+    listener = Listener()
+    srv = listener.start()
     time.sleep(1.5)
     if srv.poll() is not None:
         log("  the sshd did not start.")
@@ -445,34 +446,47 @@ def main(argv=None) -> int:
     log(f"  the sshd is up (pid {srv.pid})")
     log("")
 
-    alloc = PortAllocator()
     try:
-        _loop(alloc)
+        _loop(listener)
     except KeyboardInterrupt:
+        # Ctrl-C.  The sshd is a child, so it would go with the
+        # process, but it is stopped PROPERLY first: the port is
+        # released cleanly and the next launch does not find it busy
+        # for no reason anybody can see.
         log("")
-        log("  stopping")
+        log("  Ctrl-C: stopping")
     finally:
-        try:
-            srv.terminate()
-            srv.wait(timeout=8)
-        except Exception:
-            pass
-        sshd.stop()
+        listener.stop()
     log("  stopped")
     return 0
 
 
-def _loop(alloc: PortAllocator) -> None:
+def _loop(listener: "Listener") -> None:
     """A line-based control, so a terminal can drive it too.
 
     The desktop app is a view over the same state; this is what a
     person gets when they run it from a shell.
+
+    The commands are about RECORDS: what a dialer is called, where it
+    is, and the command to run on it.  The state of the dialers --
+    which are up, on which port -- is worked out by the listen end
+    and shown, not asked for.
     """
-    log("  commands: add <name> <host> [user] | remove <name> | "
-        "list | quit")
+    log("  commands:")
+    log("    add <name> [host] [user]   record a dialer and print its "
+        "command")
+    log("    key <name> <public key>    put a dialer's key in the list")
+    log("    command <name>             print a dialer's command again")
+    log("    list                       the records and what is up")
+    log("    forget <name>              forget a record")
+    log("    quit")
     log("")
+
     while True:
-        line = sys.stdin.readline()
+        try:
+            line = sys.stdin.readline()
+        except KeyboardInterrupt:
+            raise
         if not line:
             break
         parts = line.split()
@@ -483,30 +497,68 @@ def _loop(alloc: PortAllocator) -> None:
         if cmd in ("quit", "exit", "q"):
             break
 
-        if cmd == "add" and len(parts) >= 3:
-            name, host = parts[1], parts[2]
+        if cmd == "add" and len(parts) >= 2:
+            name = parts[1]
+            host = parts[2] if len(parts) > 2 else ""
             user = parts[3] if len(parts) > 3 else current_user()
-            try:
-                port = alloc.assign(name)
-            except ValueError as e:
-                log(f"  {e}")
-                continue
-            log(f"  {name} is on port {port}")
+            rec = records.add(name, "", host, user)
+            log(f"  recorded {rec['name']}")
             log(f"  the dialer runs:")
-            log(f"    {dialer_command(port, user, host)}")
+            log(f"    {records.command_for(rec)}")
 
-        elif cmd == "remove" and len(parts) >= 2:
-            alloc.release(parts[1])
-            log(f"  {parts[1]} is released")
+        elif cmd == "key" and len(parts) >= 3:
+            name = parts[1]
+            pubkey = " ".join(parts[2:])
+            add_key(pubkey, name)
+            records.add(name, pubkey)
+            log(f"  the key is in the list, named {name}")
+            rec = records.by_name(name)
+            log(f"  the dialer runs:")
+            log(f"    {records.command_for(rec)}")
+
+        elif cmd == "command" and len(parts) >= 2:
+            rec = records.by_name(parts[1])
+            if not rec:
+                log(f"  there is no record called {parts[1]}")
+            else:
+                log(f"  {rec['name']} runs:")
+                log(f"    {records.command_for(rec)}")
+
+        elif cmd == "forget" and len(parts) >= 2:
+            rec = records.by_name(parts[1])
+            if rec.get("pubkey"):
+                remove_key(detect._fingerprint_of(rec["pubkey"]))
+            if records.remove(parts[1]):
+                log(f"  forgotten {parts[1]}")
+            else:
+                log(f"  there is no record called {parts[1]}")
 
         elif cmd == "list":
-            if not alloc.taken:
-                log("  (no dialers)")
-            for port, name in sorted(alloc.taken.items()):
-                log(f"  {name:16} port {port}")
+            _list(listener)
 
         else:
             log("  ?")
+
+
+def _list(listener: "Listener") -> None:
+    """The records, and the dialers that are up.
+
+    Both, joined by name.  A record with no dialer is a box that is
+    not running yet; a dialer with no record is one that was let in
+    before the records existed.
+    """
+    live = {d.name or d.fingerprint: d for d in listener.dialers()}
+    recs = records.load()
+    if not recs and not live:
+        log("  (no dialers)")
+        return
+    for rec in recs:
+        name = rec.get("name") or rec.get("pubkey", "")[:24]
+        d = live.pop(name, None)
+        state = f"up on {d.port}" if d else "not up"
+        log(f"  {name:16} {state:14} {rec.get('host', '')}")
+    for name, d in live.items():
+        log(f"  {name:16} up on {d.port:6} {d.peer}  (no record)")
 
 
 def _dump(path: str, lines: int = 20) -> None:

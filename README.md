@@ -30,10 +30,18 @@ arrives to the dialer.
 ## Use
 
 On the reachable machine, open the window and press **Start**. It
-shows the address to use and the command a dialer runs.
+shows the address to use.
 
-**One thing is done by hand: the dialer's public key.** Paste it into
-the window, with a name if you want one, and the dialer is let in.
+**Record the dialer.** Fill in the form -- its name, where it is, who
+logs in, its public key, a note if there is anything worth writing
+down -- and press **Save**. The record is kept, the key goes into the
+listen end's key list so the dialer is let in, and the window prints
+the command that dialer runs.
+
+**Show the command** puts that command on the clipboard, ready to be
+pasted into a terminal on the other machine. **Copy** does the same
+for a row that is already in the panel.
+
 The name goes on the *key*, so a dialer cannot call itself something
 it is not.
 
@@ -56,16 +64,25 @@ Then, from anywhere:
 ssh -i <the access key> -p <the dialer's port> <your name>@<the reachable machine>
 ```
 
-## The dialer is FOUND, not added
+## A RECORD and a DIALER
 
-There is no list of dialers to keep in step. The dialer arrives, and
-the window sees it: the port it got, the name on its key, and where
-it is. Nobody assigns a port and nobody types a dialer into a form.
+The panel shows two different things, and they are not the same
+thing:
 
-The **dialer** finds its own port too. It asks for the first port in
-the range, and if that one is taken it asks for the next -- so the
-same command works on every box, and ten dialers end up on ten
-different ports with no coordination.
+| | what it is | when it is there |
+|---|---|---|
+| **RECORD** | what somebody filled in: the name, the address, the user, the key, the note | as long as the record is kept |
+| **DIALER** | what is actually there: a key that authenticated and asked for a port, and that port is open | while the port is open |
+
+A record with no live dialer is a box that has not been set up yet --
+and it still prints its command, because the command is what sets it
+up. A live dialer with no record is one whose key was in the list
+before the records existed.
+
+**Nobody assigns a port.** The dialer finds its own: it asks for the
+first port in the range, and if that one is taken it asks for the
+next -- so the same command works on every box, and ten dialers end
+up on ten different ports with no coordination.
 
 The client cannot be believed about this. A dialer that asks for a
 port which is already taken is told `forward success` and gets **no
@@ -76,6 +93,26 @@ faked, because it is what the key exchange is built on.
 
 The listen end does the same check the other way round, so it can say
 *which* machine is behind a port and not just that something is.
+
+## Stopping it
+
+**Ctrl-C stops it, cleanly.** The sshd is stopped, the port is
+released, and the window goes away -- so the next launch does not
+find a port that is busy for no reason anybody can see.
+
+On Windows the console sends a program in its own process group a
+BREAK rather than a Ctrl-C, and a BREAK is what the program handles.
+Either way it is the same shutdown.
+
+## The records
+
+The records are one JSON file in the state directory:
+`ljtunnel_records.json`. It is written through a temporary file and
+renamed, so a crash in the middle does not leave a file that cannot
+be read.
+
+A file that cannot be read is treated as no records, not as a crash:
+the records are a convenience, and the program works without them.
 
 ## The keys
 
@@ -150,9 +187,14 @@ it. The dialer end is a script and needs Python 3.9 or later.
 ## Tests
 
 ```bash
-python -m ljtunnel.selftest    # the checks that need one machine
-python -m ljtunnel.guitest      # the window, without showing it
+python -m ljtunnel.selftest      # the checks that need one machine
+python -m ljtunnel.guitest        # the window, without showing it
+python -m ljtunnel.interrupt_test # Ctrl-C, really interrupted
 ```
+
+The interrupt test sends a real console event to a real process and
+checks the port afterwards, because a program that is killed with the
+port still held is the failure that matters.
 
 The cross-machine test is separate: it needs two machines and a port
 the firewall lets through. It is the real proof -- the listen end on

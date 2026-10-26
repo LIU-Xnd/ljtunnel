@@ -1,9 +1,8 @@
 """The window's self-test.
 
-The window is built, a dialer's KEY is let in through the real
-button, the panel is checked, the command it hands out is checked,
-the key is taken out again, and the window is closed -- and the
-server has to be gone afterwards.
+The window is built, a dialer is RECORDED through the real form, the
+command it prints is checked, the record is forgotten, the window is
+closed -- and the server has to be gone afterwards.
 
 A window that builds but does nothing is the failure that matters,
 and only driving the real buttons finds it. The buttons are INVOKED,
@@ -13,19 +12,15 @@ and it goes through the same event path.
 The window is never shown. It is built, updated and destroyed, which
 is enough to find a layout that throws.
 
-THE PANEL SHOWS WHAT IS THERE, NOT WHAT WAS TYPED
---------------------------------------------------
-There is no "add a dialer" any more.  A dialer arrives, and the
-panel sees it.  So the test cannot add a row by typing a name and an
-address: it has to make a dialer ACTUALLY ARRIVE, and the only way
-to do that without a second machine is to put a line in the sshd's
-log and open a socket on the port.  That is what the test does: it
-feeds the detector the log lines a real sshd writes, and it opens a
-real listening socket on the port.
+THE TWO THINGS THE PANEL SHOWS
+------------------------------
+A RECORD is what somebody filled in: a name, an address, a user, a
+key, a note.  A DIALER is what is actually there: a key
+authenticated and asked for a port, and that port is open.
 
-A test that fakes the state it is testing proves nothing, so the
-socket is a REAL socket and the log lines are COPIES of what the
-sshd wrote.
+The test makes BOTH happen: a record is written through the form,
+and a dialer arrives by feeding the detector the log lines a real
+sshd wrote and opening a real socket on the port.
 """
 from __future__ import annotations
 
@@ -33,12 +28,12 @@ import socket
 import sys
 import time
 
-from . import detect, listen as L, paths, sshd
+from . import detect, listen as L, paths, records, sshd
 
 _results = []
 
 # The log lines a real sshd wrote, copied from a real run.
-_LOG_ACCEPT = ("Accepted publickey for xnd_l from 203.0.113.7 "
+_LOG_ACCEPT = ("Accepted publickey for xnd_l from 192.0.2.7 "
                "port 48238 ssh2: ED25519 "
                "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c")
 _LOG_FORWARD = ("debug1: user: xnd_l: server_input_global_request: "
@@ -50,6 +45,12 @@ _LOG_KEY_OPTION = (
     "AAAAC3NzaC1lZDI1NTE5AAAAIPOXAuTF66OZSgkRSFdn+6Hg6z9j9mUubai0zY/eK6VE"
     " liuxd@zlabm'")
 _FP = "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c"
+
+# A key that is not anybody's: it is here so the test can put it in
+# the key list and take it out again.
+_FAKE_KEY = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"
+             "dGUzdC1rZXktZm9yLXRoZS13aW5kb3ctdGVzdA"
+             " do-not-use-this-key")
 
 
 def check(name, ok, detail=""):
@@ -98,7 +99,7 @@ def run() -> int:
     check("the panel shows the address",
           a.addr_var.get() not in ("", "127.0.0.1"), a.addr_var.get())
 
-    # -- there is nothing to add: the panel is empty to begin with --
+    # -- the panel starts empty ------------------------------------
     check("the panel starts empty", len(a.tree.get_children()) == 0,
           str(a.tree.get_children()))
 
@@ -129,56 +130,90 @@ def run() -> int:
         vals = a.tree.item(rows[0], "values")
         check("the row has the name", vals[0] == "testbox", str(vals))
         check("the row has the port", vals[1] == str(port), str(vals))
+        check("the row's state is that it is up", vals[2] == "up", str(vals))
         check("the row has where it came from",
-              "203.0.113.7" in str(vals[2]), str(vals))
-        check("the row's state is open", vals[3] == "open", str(vals))
+              "192.0.2.7" in str(vals[3]), str(vals))
 
-    # -- the command it hands out ---------------------------------
-    a._copy_dialer_cmd()
-    a.update_idletasks()
-    clip = a.clipboard_get()
-    check("the command names the host", "ljtunnel dialer" in clip, clip[:100])
-    check("the command has the listen port",
-          "--listen-port 10001" in clip, clip[:100])
-    check("the command carries the access key", "ssh-ed25519" in clip,
-          clip[:100])
-    check("the command does NOT name a port",
-          "--forward-port" not in clip,
-          "the dialer finds the port itself, so the command must not "
-          "name one")
-
-    # -- the key list, through the real button --------------------
+    # -- the FORM: record a dialer --------------------------------
     #
-    # The only thing that is done by hand is the key, so that is what
-    # the form is for.  The key has to be a FRESH one: adding a key
-    # that is already in the list changes nothing, and a test that
-    # counts the keys would then be measuring the wrong thing.
+    # The form is for recording a dialer: its name, where it is, who
+    # logs in, its key, and a note.  The key has to be a FRESH one:
+    # adding a key that is already in the list changes nothing, and a
+    # test that counts the keys would then be measuring the wrong
+    # thing.
     #
-    # And the key is REMOVED first, so the test starts from the same
-    # state every time.  A test that only passes the first time it is
-    # run is a test that measures the order things happened in.
-    fresh = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"
-             "dGUzdC1rZXktZm9yLXRoZS13aW5kb3ctdGVzdA"
-             " do-not-use-this-key")
-    fp = detect._fingerprint_of(fresh)
-    L.remove_key(fp)
+    # And the record is REMOVED first, so the test starts from the
+    # same state every time.  A test that only passes the first time
+    # it is run is a test that measures the order things happened in.
+    L.remove_key(detect._fingerprint_of(_FAKE_KEY))
+    records.remove("anotherbox")
     before = len(L.read_keys())
-    a.key_var.set(fresh)
+
     a.name_var.set("anotherbox")
-    a._add()
+    a.host_var.set("192.0.2.9")
+    a.user_var.set("someone")
+    a.key_var.set(_FAKE_KEY)
+    a.note_var.set("the far box")
+    a._save()
     a.update_idletasks()
+
     check("the key was let in", len(L.read_keys()) == before + 1,
           f"{before} -> {len(L.read_keys())}")
     check("the name went on the key",
           any("anotherbox" in l for l in L.read_keys()),
           str(L.read_keys())[:120])
 
-    # -- and the key can be taken out again ------------------------
-    a.tree.selection_set(rows[0] if rows else "")
-    a._remove()
+    # ---- the record is kept ----
+    rec = records.by_name("anotherbox")
+    check("the record is kept", bool(rec), str(records.load())[:120])
+    check("with the address", rec.get("host") == "192.0.2.9", str(rec))
+    check("with the user", rec.get("user") == "someone", str(rec))
+    check("with the note", rec.get("note") == "the far box", str(rec))
+    check("with the key", rec.get("pubkey") == _FAKE_KEY, str(rec)[:80])
+
+    # ---- and the command it prints ----
+    cmd = records.command_for(rec)
+    check("the command names the dialer", "ljtunnel dialer" in cmd, cmd[:80])
+    check("the command names the address", "192.0.2.9" in cmd, cmd[:80])
+    check("the command names the user", "--user someone" in cmd, cmd[:80])
+    check("the command carries the access key", "ssh-ed25519" in cmd, cmd[:80])
+    check("the command does NOT name a port", "--forward-port" not in cmd,
+          "the dialer finds the port itself")
+
+    # ---- and the panel shows the record ----
+    a._refresh()
     a.update_idletasks()
+    names = [a.tree.item(i, "values")[0]
+             for i in a.tree.get_children()]
+    check("the record is in the panel", "anotherbox" in names, str(names))
+    for iid in a.tree.get_children():
+        vals = a.tree.item(iid, "values")
+        if vals[0] == "anotherbox":
+            check("the record's row says it is not up", vals[2] == "not up",
+                  str(vals))
+            check("the record's row has the address",
+                  vals[3] == "192.0.2.9", str(vals))
+            check("the record's row has the note",
+                  vals[4] == "the far box", str(vals))
+
+    # ---- the command is copied for the other machine ----
+    target = [i for i in a.tree.get_children()
+              if a.tree.item(i, "values")[0] == "anotherbox"]
+    a.tree.selection_set(target)
+    a._copy_selected()
+    a.update_idletasks()
+    clip = a.clipboard_get()
+    check("the command is on the clipboard", "ljtunnel dialer" in clip,
+          clip[:80])
+    check("and it names the address", "192.0.2.9" in clip, clip[:80])
+
+    # ---- and it can be forgotten ----
+    a._forget()
+    a.update_idletasks()
+    check("the record is gone", not records.by_name("anotherbox"),
+          str(records.load())[:80])
     check("the key is out of the list",
-          not any(_FP in l or "testbox" in l for l in L.read_keys()),
+          not any("anotherbox" in l for l in L.read_keys()),
           str(L.read_keys())[:120])
 
     s.close()
@@ -194,6 +229,10 @@ def run() -> int:
           not sshd._pid_alive(pid), f"pid {pid}")
     check("the port is free after the window closes",
           not L.port_in_use(10001))
+
+    # ---- and closing twice is not a problem ----
+    a._on_close()
+    check("closing twice is safe", True)
 
     passed = sum(1 for _, ok, _ in _results if ok)
     failed = [n for n, ok, _ in _results if not ok]
