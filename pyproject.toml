@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ljtunnel"
+version = "0.1.0"
+description = "An ssh reverse-forward tunnel: the far side offers its own sshd"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = []
+
+[project.scripts]
+ljtunnel = "ljtunnel.__main__:main"
+
+[tool.setuptools]
+packages = ["ljtunnel"]
+
+[tool.pyappdist]
+name = "ljtunnel"
+python = "3.12"
+manager = "requirements.txt"
+
+# The window. It is a GUI launcher, so it gets no console: anything
+# printed to stdout goes nowhere.
+[[tool.pyappdist.launchers]]
+name = "ljtunnel"
+entry = "ljtunnel.__main__:main"
+gui = true
+icon = { windows = "assets/ljtunnel.ico" }
+
+# The console one, for the dialer end and for anything that has to
+# print.
+[[tool.pyappdist.launchers]]
+name = "ljtunnel-console"
+entry = "ljtunnel.__main__:main"
+gui = false
+
+[[tool.pyappdist.targets]]
+name = "windows"
+platform = "windows-x86_64"
+format = "msi"
+manufacturer = "zlab"
+scope = "user"
+upgrade-code = "3F2A9C41-7B58-4D6E-9A13-5C8E0D2F4B77"
+# A licence is what makes pyappdist emit a <UI> section and pass
+# -ext WixToolset.UI.wixext to wix. Without it the MSI uses Windows'
+# bare progress bar: it fills up and the window disappears, with no
+# "finished" page and nothing to click.
+license = "assets/license.rtf"

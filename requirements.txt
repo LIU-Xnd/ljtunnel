@@ -1,0 +1,2 @@
+# ljtunnel has no dependencies: it is the standard library and the
+# system's own ssh. pyappdist needs the manager named even so.

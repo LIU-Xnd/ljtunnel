@@ -1,0 +1,24 @@
+# the build tree: a whole Python runtime, about 5500 files
+.appdist-build/
+appdist/
+.wix/
+
+# the wheels
+build/
+dist/
+*.egg-info/
+
+# the state directory. It holds private keys, and it lives outside the
+# repository anyway -- but the ignore is here in case somebody points
+# it here.
+ljtunnel_*.pem
+id_rsa_ljtunnel
+id_rsa_ljtunnel.pub
+id_rsa_ljtunnel_access
+id_rsa_ljtunnel_access.pub
+*_authorized_keys
+*_host_ed25519*
+
+__pycache__/
+*.py[cod]
+*.bak
