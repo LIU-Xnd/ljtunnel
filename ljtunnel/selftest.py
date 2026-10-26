@@ -530,12 +530,15 @@ def main() -> int:
     failed = [n for n, ok, _ in _results if not ok]
     print()
     if failed:
-        print(f"  {passed}/{len(_results)} passed, {len(failed)} failed")
+        print(f"  {len(_results)} checks: {passed} passed, {len(failed)} failed")
         for n in failed:
             print(f"    FAILED: {n}")
         return 1
-    print(f"  {passed}/{len(_results)} passed, 0 failed"
-          + (f" ({skipped} skipped)" if skipped else ""))
+    # The skips are part of the total: a skipped check is neither a
+    # pass nor a failure, and a summary that leaves it out reads as
+    # fewer checks than ran.
+    print(f"  {len(_results)} checks: {passed} passed, 0 failed"
+          + (f", {skipped} skipped" if skipped else ""))
     return 0
 
 
