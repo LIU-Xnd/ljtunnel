@@ -143,27 +143,30 @@ class App(tk.Tk):
         ttk.Entry(add, textvariable=self.host_var, width=16).grid(
             row=0, column=3, sticky="w", padx=(4, 12))
 
-        ttk.Label(add, text="user").grid(row=0, column=4, sticky="w")
+        ttk.Label(add, text="user here").grid(row=0, column=4, sticky="w")
         self.user_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.user_var, width=10).grid(
-            row=0, column=5, sticky="w", padx=(4, 12))
+        self.user_entry = ttk.Entry(add, textvariable=self.user_var, width=10)
+        self.user_entry.grid(row=0, column=5, sticky="w", padx=(4, 12))
+        ttk.Label(add, text="(the user on THIS machine -- leave it "
+                            "empty for yours)").grid(
+            row=1, column=0, columnspan=6, sticky="w", pady=(2, 0))
 
         ttk.Label(add, text="dialer's public key").grid(
-            row=1, column=0, sticky="w", pady=(6, 0))
+            row=2, column=0, sticky="w", pady=(6, 0))
         self.key_var = tk.StringVar(value="")
         ttk.Entry(add, textvariable=self.key_var).grid(
-            row=1, column=1, columnspan=5, sticky="ew", padx=(4, 12),
-            pady=(6, 0))
-
-        ttk.Label(add, text="notes").grid(row=2, column=0, sticky="w",
-                                          pady=(6, 0))
-        self.note_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.note_var).grid(
             row=2, column=1, columnspan=5, sticky="ew", padx=(4, 12),
             pady=(6, 0))
 
+        ttk.Label(add, text="notes").grid(row=3, column=0, sticky="w",
+                                          pady=(6, 0))
+        self.note_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.note_var).grid(
+            row=3, column=1, columnspan=5, sticky="ew", padx=(4, 12),
+            pady=(6, 0))
+
         buttons = ttk.Frame(add)
-        buttons.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        buttons.grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
         ttk.Button(buttons, text="Save", command=self._save).pack(side="left")
         ttk.Button(buttons, text="Show the command",
                    command=self._show_command).pack(side="left", padx=6)
@@ -260,8 +263,12 @@ class App(tk.Tk):
             time.sleep(1.5)
             if self.srv.poll() is not None:
                 why = "the sshd did not start"
-                if sshd.port_busy(L.LISTEN_SSHD_PORT):
-                    why += f" -- port {L.LISTEN_SSHD_PORT} is held by " \
+                # the port the LISTENER was built with, not the
+                # module's constant: the two can differ, and a
+                # message about the wrong port sends the reader
+                # looking at the wrong thing
+                if sshd.port_busy(self.listener.sshd_port):
+                    why += f" -- port {self.listener.sshd_port} is held by " \
                            "another process"
                 self.events.put(("error", why))
                 return

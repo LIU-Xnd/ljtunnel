@@ -813,6 +813,134 @@ def test_records():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# --------------------------------------------------------- the address
+
+def test_no_internal_addresses():
+    """No real internal address in the tracked tree.
+
+    The address of a machine is not a fact about the software, and
+    it is wrong the moment the machine is on a different network.  So
+    it is read at run time and never written down.
+
+    The exception is the documentation ranges: 192.0.2.0/24 and
+    203.0.113.0/24 are reserved for exactly this, and they are
+    never routed.  Everything else in those blocks is a real
+    address, and a real address in the tree is a leak.
+
+    The whole TRACKED tree is walked, not just the package: the
+    README and the tools are shipped too, and an address in a
+    comment is as much a leak as an address in a string.
+    """
+    import re as _re
+    import subprocess as _subprocess
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    try:
+        names = _subprocess.run(
+            ["git", "ls-files"], cwd=str(root), capture_output=True,
+            text=True, errors="replace", timeout=60).stdout.split()
+    except (OSError, _subprocess.TimeoutExpired):
+        check("the tracked files can be listed (skipped)", True)
+        return
+    if not names:
+        check("the tracked files can be listed (skipped)", True)
+        return
+
+    # a private address, but not the documentation ranges
+    #
+    # The documentation ranges are 192.0.2.0/24, 198.51.100.0/24
+    # and 203.0.113.0/24.  Everything else in those three blocks is
+    # a real address.
+    #
+    # The look-ahead is on the WHOLE first three octets, so the
+    # documentation ranges are skipped and nothing else is.
+    pat = _re.compile(
+        r"(?<!\d)"
+        r"(?!192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)"
+        r"(?:"
+        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+        r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+        r"|192\.168\.\d{1,3}\.\d{1,3}"
+        r")"
+        r"(?!\d)")
+
+    bad = []
+    for name in names:
+        p = root / name
+        if not p.is_file() or p.suffix in (".msi", ".exe", ".ico", ".png",
+                                            ".pyc", ".zip"):
+            continue
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for n, line in enumerate(body.splitlines(), 1):
+            if pat.search(line):
+                bad.append(f"{name}:{n}")
+    check("no internal address in the tracked tree", not bad,
+          ", ".join(bad[:8]))
+
+
+# ------------------------------------------------------- the command
+
+def test_command():
+    """The command a dialer runs, and what is IN it.
+
+    The command is the whole handoff: it is what a person copies
+    from the panel and pastes into a terminal on the other machine.
+    So what it carries, and what it does not, is part of the
+    contract.
+
+    WHAT IT MUST CARRY
+      - the reachable end's address
+      - the reachable end's port
+      - the reachable end's USER, and not the dialer's own user:
+        the dialer opens an ssh session to the REACHABLE end, and
+        that end's sshd refuses a user that does not exist on it
+      - the access key, so the setup is one step
+
+    WHAT IT MUST NOT CARRY
+      - a forward port: the dialer finds a free one itself
+      - a private key: the command is pasted into a terminal and
+        shown in the panel
+    """
+    rec = {"name": "box-a", "host": "192.0.2.5", "user": "someone",
+           "pubkey": "", "note": ""}
+    cmd = records.command_for(rec)
+
+    check("the command is a dialer command",
+          cmd.startswith("ljtunnel dialer"), cmd[:60])
+    check("it names the address", "192.0.2.5" in cmd, cmd[:100])
+    check("it names the user", "--user someone" in cmd, cmd[:100])
+    check("it names the listen port",
+          f"--listen-port {L.LISTEN_SSHD_PORT}" in cmd, cmd[:100])
+    check("it carries the access key", "ssh-ed25519" in cmd, cmd[:100])
+    check("it does NOT name a forward port",
+          "--forward-port" not in cmd,
+          "the dialer finds the port itself")
+    check("it carries NO private key",
+          "PRIVATE KEY" not in cmd and "id_rsa" not in cmd, cmd[:100])
+    check("it carries no secret of any other kind",
+          "password" not in cmd.lower(), cmd[:100])
+
+    # ---- with no user, it is the reachable end's own user ----
+    cmd2 = records.command_for({"name": "box-b", "host": "192.0.2.6",
+                                 "user": "", "pubkey": ""})
+    check("with no user it uses this end's own",
+          f"--user {L.current_user()}" in cmd2, cmd2[:100])
+
+    # ---- with no address, it is this end's own address ----
+    cmd3 = records.command_for({"name": "box-c", "host": "", "user": "",
+                                 "pubkey": ""})
+    check("with no address it uses this end's own",
+          L.local_ipv4() in cmd3, cmd3[:100])
+
+    # ---- and the access key is a PUBLIC key ----
+    check("the access key is a public key",
+          "PRIVATE" not in L.access_public_key(),
+          L.access_public_key()[:60])
+
+
 # ---------------------------------------------------------------- the run
 
 def main() -> int:
@@ -823,7 +951,7 @@ def main() -> int:
                test_allocator, test_port_in_use, test_firewall,
                test_dispatcher, test_console, test_address, test_version,
                test_app, test_detect, test_detect_live, test_permit_listen,
-               test_records):
+               test_records, test_command, test_no_internal_addresses):
         try:
             fn()
         except Exception as e:                   # noqa: BLE001

@@ -153,6 +153,13 @@ def command_for(record: dict) -> str:
     address and the user running it are used, because that is what
     the command needs.
 
+    THE USER IS THE REACHABLE END'S USER.  The dialer opens an ssh
+    session to the reachable end, and the reachable end's sshd
+    refuses a user that does not exist on it -- so the name in the
+    command is a user of the machine the command is going to reach,
+    not a user of the machine the command is run on.  The two are
+    different machines and they have different users.
+
     The command does NOT name a port: the dialer finds a free one
     itself, and if the port it asked for is taken it asks for the
     next.  So the same command works on every box.

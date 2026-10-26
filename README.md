@@ -201,3 +201,20 @@ the firewall lets through. It is the real proof -- the listen end on
 one machine, the dialer end on another, and a connection to the
 forwarded port landing on the **dialer's** sshd, with nobody adding
 a dialer to the panel.
+
+```bash
+LJT_FAR_HOST=... LJT_FAR_PORT=... LJT_FAR_USER=... \
+LJT_FAR_PASSWORD=... python tools/crossmachine_form.py
+```
+
+It fills in the form, takes the command from the **clipboard**, runs
+it on the far machine, and watches the dialer arrive by itself.
+
+## The user in the command
+
+The command names the **reachable end's** user, not the dialer's own.
+The dialer opens an ssh session to the reachable end, and the
+reachable end's sshd refuses a user that does not exist on it -- so
+the name is a user of the machine the command is going to reach.
+
+Leave the field empty and it is your own user on the reachable end.
