@@ -465,15 +465,31 @@ def stop() -> bool:
     """
     pidfile = paths.pid_file()
     if not os.path.isfile(pidfile):
-        return False
+        # NO PID FILE, BUT THERE MAY STILL BE AN ORPHAN.
+        #
+        # The pid file is where the answer usually is, and it is
+        # right every time it is there.  But a test that removes the
+        # state directory leaves a process behind with nothing to
+        # name it, and it goes on holding the port -- and the next
+        # launch says the port is busy for no reason anybody can
+        # see.
+        #
+        # MEASURED: a leftover sshd on 10000, with no pid file, and
+        # `stop()` said "not running" and left it there.
+        #
+        # So the orphans are found by their COMMAND LINE, which
+        # names this project's config -- never by the image name,
+        # because the SYSTEM sshd is a service named `sshd.exe` and
+        # it must not be touched.
+        return _stop_orphans()
     try:
         with open(pidfile, "r", encoding="utf-8") as fh:
             pid = int(fh.read().strip())
     except (OSError, ValueError):
-        return False
+        return _stop_orphans()
     if not _pid_alive(pid):
         _forget_pid()
-        return False
+        return _stop_orphans()
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/PID", str(pid)],
@@ -493,6 +509,61 @@ def stop() -> bool:
     return True
 
 
+def _stop_orphans() -> bool:
+    """Stop this project's sshd processes that have no pid file.
+
+    THE COMMAND LINE IS THE HANDLE.  It names this project's config,
+    and the SYSTEM sshd's command line does not, so the two are never
+    confused.
+
+    On Windows the image is `sshd.exe` for the user-level one and
+    `sshd-session.exe` for a connection, so both names are matched.
+    On Linux the process title changes to "sshd: /usr/sbin/sshd -f
+    ...", so the config path is still in the command line and the
+    match works there too.
+    """
+    import subprocess as _sp
+
+    config = os.path.basename(paths.sshd_config())
+
+    if sys.platform == "win32":
+        find_ps = ("Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+                   "Where-Object { $_.Name -like 'sshd*' -and "
+                   f"$_.CommandLine -like '*{config}*' }} | "
+                   "ForEach-Object { $_.ProcessId }")
+    else:
+        find_ps = (f"pgrep -f '{config}' 2>/dev/null || true")
+
+    try:
+        r = _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-Command", find_ps] if sys.platform == "win32"
+                    else ["sh", "-c", find_ps],
+                    capture_output=True, text=True, errors="replace",
+                    timeout=60)
+    except (OSError, _sp.TimeoutExpired):
+        return False
+
+    pids = []
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+
+    if not pids:
+        return False
+
+    for pid in pids:
+        try:
+            if sys.platform == "win32":
+                _sp.run(["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True, timeout=60)
+            else:
+                os.kill(pid, 15)
+        except (OSError, _sp.TimeoutExpired):
+            pass
+    return True
+
+
 def stop_sessions() -> int:
     """Stop the per-connection children, and say how many there were.
 
@@ -509,6 +580,11 @@ def stop_sessions() -> int:
     project's config.  Never by the image name alone: the SYSTEM
     sshd is a service named `sshd.exe` and it must not be touched,
     and its sessions are named the same way.
+
+    AND THE LISTENER IS IN THE MATCH TOO.  The name filter is
+    `sshd*`, so it covers `sshd.exe` and `sshd-session.exe` alike --
+    a user-level listener left without a pid file is an orphan, and
+    an orphan holds the port just as well as a session does.
     """
     if sys.platform != "win32":
         return 0
@@ -521,10 +597,10 @@ def stop_sessions() -> int:
     # there and not the number that are left.  A count taken AFTER
     # the killing is always zero, and a function that always returns
     # zero cannot say that it did something.
-    count_ps = ("(Get-CimInstance Win32_Process -Filter "
-                "\"Name LIKE 'sshd-session%'\" -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.CommandLine -like "
-                f"'*{config}*' }} | Measure-Object).Count")
+    count_ps = ("(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.Name -like 'sshd*' -and "
+                f"$_.CommandLine -like '*{config}*' }} | "
+                "Measure-Object).Count")
 
     try:
         r = _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive",
@@ -538,10 +614,9 @@ def stop_sessions() -> int:
         return 0
 
     # and kill them
-    kill_ps = ("Get-CimInstance Win32_Process -Filter "
-               "\"Name LIKE 'sshd-session%'\" -ErrorAction SilentlyContinue | "
-               "Where-Object { $_.CommandLine -like "
-               f"'*{config}*' }} | "
+    kill_ps = ("Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+               "Where-Object { $_.Name -like 'sshd*' -and "
+               f"$_.CommandLine -like '*{config}*' }} | "
                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
                "-ErrorAction SilentlyContinue }")
     try:

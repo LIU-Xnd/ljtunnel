@@ -1146,6 +1146,89 @@ def test_forget():
             paths.state_dir = old
 
 
+def test_orphan_sshd():
+    """An sshd with no pid file is still stopped.
+
+    THE PID FILE IS WHERE THE ANSWER USUALLY IS, and it is right
+    every time it is there.  But a process whose pid file has been
+    deleted -- by a test that clears the state directory, by a
+    person, by anything -- goes on holding its port, and the next
+    launch says the port is busy for no reason anybody can see.
+
+    MEASURED: a leftover sshd on 10000 with no pid file, and
+    `stop()` said "not running" and left it there.
+
+    So the orphans are found by their COMMAND LINE, which names this
+    project's config.  And the SYSTEM sshd is not found that way,
+    because its command line does not name the config -- and it must
+    never be touched.
+    """
+    import subprocess
+    import sys
+    import time
+
+    from ljtunnel import listen as L, paths, sshd
+
+    if sys.platform != "win32":
+        # The check needs a process to find, and starting one is
+        # different on each platform.  The Linux suite covers the
+        # same ground through the pid file.
+        check("the orphan check is Windows-only (skipped)", True)
+        return
+
+    # ---- a real sshd, started the way the product starts it ----
+    port = 10000
+    if L.port_in_use(port):
+        check("the port for the orphan test is free", False, str(port))
+        return
+
+    proc = subprocess.Popen(
+        [sshd.sshd_path(), "-f", sshd.write_config(port, "127.0.0.1"),
+         "-D", "-e"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        for _ in range(40):
+            if L.port_in_use(port):
+                break
+            time.sleep(0.25)
+        check("the orphan sshd came up", L.port_in_use(port), str(port))
+
+        # ---- and the pid file is GONE ----
+        # ---- so the only way to find it is the command line ----
+        pidfile = paths.pid_file()
+        if os.path.isfile(pidfile):
+            os.remove(pidfile)
+        check("the pid file is not there", not os.path.isfile(pidfile))
+
+        sshd.stop()
+        for _ in range(40):
+            if not L.port_in_use(port):
+                break
+            time.sleep(0.25)
+        check("the orphan was stopped anyway",
+              not L.port_in_use(port), "the port is still held")
+    finally:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            pass
+
+    # ---- and the SYSTEM sshd is still there ----
+    # ---- it is the proof that the cleanup did what it was ----
+    # ---- supposed to and nothing more ----
+    system_up = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq sshd.exe"],
+        capture_output=True, text=True, errors="replace", timeout=60)
+    check("the SYSTEM sshd was not touched",
+          "sshd.exe" in (system_up.stdout or ""),
+          "the system sshd is gone")
+
+
 def test_permit_listen():
     """The forward range is in the config, on ONE line."""
     from ljtunnel import sshd
@@ -1596,10 +1679,10 @@ def main() -> int:
                test_dispatcher, test_console, test_address, test_version,
                test_app, test_detect, test_detect_live, test_permit_listen,
                test_records, test_command, test_no_internal_addresses,
-               test_records, test_command, test_no_internal_addresses,
                test_firewall_body, test_one_key_two_jobs,
                test_key_command,
                test_forget,
+               test_orphan_sshd,
                test_elevation):
         try:
             fn()
