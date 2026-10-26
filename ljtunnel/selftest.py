@@ -884,6 +884,80 @@ def test_firewall_body():
           "the caller can read what happened")
 
 
+def test_one_key_two_jobs():
+    """The dialer's HOST key is its MACHINE key, and everything that
+    compares fingerprints knows it.
+
+    THE DIALER'S SSHD PRESENTS THE MACHINE KEY AS ITS HOST KEY, and
+    that is what makes the listen end able to NAME the dialer without
+    the sshd's log: the key behind a forwarded port is the key the
+    dialer logged in with, and the listen end knows that key.
+
+    **AND THE TWO FINGERPRINTS MUST BE COMPARED AGAINST THE SAME
+    FILE.**  There are two key files on the dialer end -- the host
+    key's and the machine key's -- and they are different keys.  So
+    a check that compares against the host key's file says "this
+    port is not mine" about a port that IS, and the dialer gives up
+    on every port:
+
+        the client said yes but port 20000 is not ours.  Trying the
+        next one.
+
+    and then:
+
+        no port in 20000-20019 could be taken.
+
+    which looks like the reachable end is full, and is not.
+
+    So the check is that the sshd's config names the MACHINE key,
+    and that the fingerprint the dialer compares against is the
+    MACHINE key's fingerprint.  Both, and they are the same key.
+    """
+    from ljtunnel import dialer, paths, sshd
+
+    # ---- the config names the machine key ----
+    cfg = sshd.write_config(10001, "127.0.0.1", host_key=paths.client_key())
+    text = open(cfg, encoding="utf-8").read()
+    check("the sshd's config can name the machine key",
+          paths.client_key().replace("\\", "/") in text
+          or paths.client_key() in text,
+          "the machine key is not in it")
+
+    # ---- and the two are the same key ----
+    machine = sshd.public_key_of(paths.client_key())
+    host = sshd.public_key_of(paths.host_key())
+    check("the machine key and the host key are different files",
+          machine != host, "they are the same key")
+
+    # ---- and the fingerprint the dialer compares against is the
+    #      MACHINE key's ----
+    import subprocess
+    r = subprocess.run([sshd.ssh_keygen_path(), "-lf",
+                        paths.client_key() + ".pub"],
+                       capture_output=True, text=True,
+                       errors="replace", timeout=60)
+    parts = (r.stdout or "").strip().split()
+    machine_fp = parts[1] if len(parts) >= 2 else ""
+
+    r2 = subprocess.run([sshd.ssh_keygen_path(), "-lf",
+                         paths.host_key() + ".pub"],
+                        capture_output=True, text=True,
+                        errors="replace", timeout=60)
+    parts2 = (r2.stdout or "").strip().split()
+    host_fp = parts2[1] if len(parts2) >= 2 else ""
+
+    check("the two fingerprints are different",
+          machine_fp and host_fp and machine_fp != host_fp,
+          f"{machine_fp} / {host_fp}")
+
+    # and the dialer's own check reads the machine key's file
+    import inspect
+    src = inspect.getsource(dialer._own_host_key_fingerprint)
+    check("and the dialer compares against the MACHINE key",
+          "client_key()" in src,
+          "it compares against the host key, which is a different key")
+
+
 def test_key_command():
     """`ljtunnel key` prints the MACHINE key, not the host key.
 
@@ -1419,7 +1493,8 @@ def main() -> int:
                test_app, test_detect, test_detect_live, test_permit_listen,
                test_records, test_command, test_no_internal_addresses,
                test_records, test_command, test_no_internal_addresses,
-               test_firewall_body, test_key_command,
+               test_firewall_body, test_one_key_two_jobs,
+               test_key_command,
                test_forget,
                test_elevation):
         try:

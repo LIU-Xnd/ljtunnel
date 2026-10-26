@@ -353,8 +353,21 @@ def _own_host_key_fingerprint() -> str:
     It is the key the sshd on this machine presents, and it is what
     somebody on the other end of a forward sees.  So it is the thing
     that says "this port is mine".
+
+    IT IS THE MACHINE KEY, because this end's sshd presents the
+    machine key as its host key.  The machine key is what the
+    reachable end knows -- it is the key this end logs in with -- so
+    the key behind a forwarded port is the key the reachable end can
+    look up in its list, and that is how the reachable end NAMES the
+    dialer without the sshd's log.
+
+    So it is the same key on both sides of the check, and it is
+    checked against the machine key's file rather than the host
+    key's -- which is a different file and a different key, and
+    comparing against it says "this port is not mine" about a port
+    that IS.
     """
-    key = paths.host_key()
+    key = paths.client_key()
     if not os.path.isfile(key + ".pub"):
         return ""
     try:
