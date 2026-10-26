@@ -89,6 +89,19 @@ def main() -> int:
         "--exclude-module", "tkinter",
         "--exclude-module", "unittest",
         "--exclude-module", "pydoc",
+        # THE PACKAGE IS IN THE TREE, AND THE TREE IS ON THE PATH.
+        #
+        # The package is usually installed as an EDITABLE install,
+        # which puts a finder in site-packages rather than the
+        # package itself.  PyInstaller does not follow those finders,
+        # so it does not see the package and the frozen binary comes
+        # out with no `ljtunnel` in it:
+        #
+        #     ModuleNotFoundError: No module named 'ljtunnel'
+        #
+        # The tree is on the path as well, so the package is found
+        # where it really is.
+        "--paths", str(ROOT),
         str(ENTRY),
     ]
     log("")
