@@ -132,6 +132,23 @@ def check(msi: Path) -> int:
     props = {r.GetString(1) for r in rows("SELECT `Property` FROM `Property`")}
 
     print(f"=== {msi} ===")
+
+    # ---- and the uninstall question about the configuration ----
+    #
+    # The stock WixUI ExitDialog has a checkbox that is hidden unless
+    # a property gives it a value.  This one appears, it is bound to
+    # the property the removal reads, and the removal is scheduled
+    # with that property as its condition.
+    #
+    # A silent uninstall never shows the page, so "it uninstalled"
+    # proves nothing about it.  The tables say whether the question
+    # is really there.
+    found = _check_remove_configuration(msi)
+    if found is None:
+        print("  the uninstall question: NOT THERE")
+    else:
+        for line in found:
+            print(f"  {line}")
     print(f"  properties defined: {len(props)}")
 
     bad = []
@@ -169,6 +186,69 @@ def check(msi: Path) -> int:
 
     print("  ok: no 2819")
     return 0
+
+
+def _check_remove_configuration(msi: Path):
+    """Is the "remove the configuration" question really in the MSI?
+
+    Returns the lines that say what was found, or None when the
+    question is not there at all.
+    """
+    import msilib
+
+    try:
+        db = msilib.OpenDatabase(str(msi), msilib.MSIDBOPEN_READONLY)
+    except Exception:
+        return None
+
+    def rows(query):
+        try:
+            v = db.OpenView(query)
+            v.Execute(None)
+        except Exception:
+            return []
+        out = []
+        while True:
+            rec = v.Fetch()
+            if rec is None:
+                break
+            vals = []
+            for i in range(1, 12):
+                try:
+                    vals.append(rec.GetString(i))
+                except Exception:
+                    vals.append("")
+            out.append(vals)
+        return out
+
+    found = []
+
+    # the checkbox, and the property it writes
+    for vals in rows("SELECT Control, Property FROM Control"):
+        if vals[0] == "OptionalCheckBox":
+            found.append(f"the checkbox -> {vals[1] or '(no property)'}")
+
+    # the property that makes it appear
+    for vals in rows("SELECT Property, Value FROM Property"):
+        if "EXITDIALOGOPTIONALCHECKBOX" in vals[0]:
+            found.append(f"the property {vals[0]} is set")
+
+    # the action that removes the directory
+    for vals in rows("SELECT CustomAction, Target FROM CustomAction"):
+        if "rm_ljtunnel" in vals[0]:
+            found.append(f"the action {vals[0]}")
+
+    # and the condition on it
+    for vals in rows("SELECT Action, Condition FROM InstallExecuteSequence"):
+        if "rm_ljtunnel" in vals[0]:
+            found.append(f"the removal runs when {vals[1]}")
+
+    # and the directory it removes
+    for vals in rows("SELECT Directory, DefaultDir FROM Directory"):
+        if "ljtunnel_state" in vals[0]:
+            found.append(f"the directory {vals[0]} ({vals[1]})")
+
+    return found or None
 
 
 def _pe_subsystem(path: Path) -> int:

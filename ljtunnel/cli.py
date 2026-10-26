@@ -30,6 +30,8 @@ commands:
   dialer     the unreachable end: an sshd, forwarded back through the
              reachable end
   key        print this end's public key, for the other end's key list
+  forget     remove this end's configuration: the keys, the records,
+             the config and the log
 
 run 'ljtunnel <command> --help' for a command's own options.
 """
@@ -163,6 +165,8 @@ def main(argv=None) -> int:
         from .dialer import main as run
     elif command == "key":
         run = _run_key
+    elif command == "forget":
+        from .forget import main as run
     else:
         print(f"ljtunnel: unknown command {command!r}\n", file=sys.stderr)
         print(USAGE.format(version=__version__), end="", file=sys.stderr)

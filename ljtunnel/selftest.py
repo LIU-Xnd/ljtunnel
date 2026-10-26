@@ -884,6 +884,82 @@ def test_firewall_body():
           "the caller can read what happened")
 
 
+def test_forget():
+    """The configuration can be taken away, and the question is asked.
+
+    THE KEYS ARE THE IDENTITY OF A TUNNEL.  A machine that cannot be
+    reached is identified by the key it logs in with, and the listen
+    end's key list names the machines it trusts.  So removing them
+    has to be a DELIBERATE act, not the default.
+
+    And the removal takes the WHOLE DIRECTORY, because the whole
+    configuration is in one directory: the sshd config, the two key
+    pairs, the key list, the records, the pid and the log.  Nothing
+    is written anywhere else, so "forget everything this end knew"
+    is one directory, removed.
+    """
+    from ljtunnel import forget, paths
+
+    # ---- the command is there, on both ends ----
+    import subprocess
+    r = subprocess.run([sys.executable, "-m", "ljtunnel", "forget",
+                        "--help"], capture_output=True, text=True,
+                       errors="replace", timeout=90)
+    check("the forget command has a help", r.returncode == 0,
+          (r.stdout or r.stderr or "").strip()[:80])
+    check("and it says what it does",
+          "configuration" in (r.stdout or ""),
+          (r.stdout or "").strip()[:80])
+    check("and it says the firewall rule is NOT removed",
+          "firewall" in (r.stdout or "").lower(),
+          "the rule is a machine-wide thing")
+
+    # ---- the directory holds everything ----
+    directory = paths.state_dir()
+    check("the configuration is in ONE directory",
+          directory.endswith(paths.APP_NAME), directory)
+
+    # ---- and the removal really removes it ----
+    #
+    # It is done in a scratch directory, so the real configuration is
+    # not touched by the test.
+    import tempfile
+    import contextlib
+    import io
+    with tempfile.TemporaryDirectory() as tmp:
+        old = paths.state_dir
+        paths.state_dir = lambda: tmp
+        try:
+            with open(paths.sshd_config(), "w", encoding="utf-8") as fh:
+                fh.write("Port 10001\n")
+            with open(paths.client_key(), "w", encoding="utf-8") as fh:
+                fh.write("PRIVATE KEY\n")
+            check("there is something to remove",
+                  os.path.isdir(tmp) and bool(os.listdir(tmp)),
+                  str(os.listdir(tmp))[:60])
+
+            # --yes, so the test does not need a keyboard, and
+            # quiet, so the suite's own output stays readable
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = forget.forget(assume_yes=True)
+            check("the removal says it worked", rc == 0, str(rc))
+            check("and the directory is gone", not os.path.isdir(tmp),
+                  "still there")
+        finally:
+            paths.state_dir = old
+
+    # ---- and removing what is not there is not a failure ----
+    with tempfile.TemporaryDirectory() as tmp:
+        old = paths.state_dir
+        paths.state_dir = lambda: os.path.join(tmp, "not-there")
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = forget.forget(assume_yes=True)
+            check("removing nothing is not a failure", rc == 0, str(rc))
+        finally:
+            paths.state_dir = old
+
+
 def test_permit_listen():
     """The forward range is in the config, on ONE line."""
     from ljtunnel import sshd
@@ -1285,7 +1361,8 @@ def main() -> int:
                test_app, test_detect, test_detect_live, test_permit_listen,
                test_records, test_command, test_no_internal_addresses,
                test_records, test_command, test_no_internal_addresses,
-               test_firewall_body, test_elevation):
+               test_firewall_body, test_forget,
+               test_elevation):
         try:
             fn()
         except Exception as e:                   # noqa: BLE001

@@ -211,6 +211,24 @@ def main() -> int:
     log("  changed" if switch(wxs) else "  already WixUI_InstallDir")
 
     log("")
+    log("=== add the uninstall question about the configuration ===")
+    #
+    # The keys are the identity of a tunnel, so the configuration is
+    # KEPT by default -- removing it would silently break every
+    # tunnel that used this machine.  But a person giving the machine
+    # away does not want the private keys left on it, so the
+    # uninstaller asks.
+    from msi_remove_config import add_remove_configuration, check as has_it
+    if has_it(wxs):
+        log("  already there")
+    else:
+        ok = add_remove_configuration(wxs)
+        log("  added" if ok else "  NOT ADDED -- the .wxs is not what "
+                                   "was expected")
+        if not ok:
+            raise SystemExit("the uninstall question was not added")
+
+    log("")
     log("=== wix build ===")
     DIST.mkdir(parents=True, exist_ok=True)
     # the version comes from the .wxs, which pyappdist filled in
