@@ -205,6 +205,35 @@ def main() -> int:
             "neither assets/ljtunnel.ico nor assets/license.rtf is there")
 
     log("")
+    log("=== make the ProductCode a function of the UpgradeCode ===")
+    #
+    # THE SAME VERSION MUST BE REINSTALLABLE, and it is not without
+    # this.
+    #
+    # pyappdist generates a RANDOM ProductCode on every build.  The
+    # ProductCode is what Windows Installer matches an install
+    # against: a package with a ProductCode that is already
+    # installed is not a reinstall, it is a DIFFERENT PRODUCT, and
+    # the install is refused with
+    #
+    #     Exit code 67: another version of this product is already
+    #     installed
+    #
+    # So every rebuild of the same version produced a package that
+    # could not be installed over the previous one, and the only
+    # way out was to uninstall by the OLD package, which was gone.
+    # The exit code 69 says the same thing from the other side:
+    # "cannot uninstall, another product installed".
+    #
+    # THE PRODUCT CODE IS DERIVED FROM THE UPGRADE CODE AND THE
+    # VERSION, so it is the same for the same version every time.
+    # A different version gets a different one, which is what makes
+    # the upgrade work.
+    from msi_product_code import set_product_code
+    ok = set_product_code(wxs)
+    log("  set" if ok else "  NOT SET -- the .wxs is not what was expected")
+
+    log("")
     log("=== switch the UI set to the one with a folder page ===")
     sys.path.insert(0, str(ROOT / "tools"))
     from switch_ui_to_install_dir import switch

@@ -78,9 +78,45 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The property the condition reads.  It is the stock checkbox's own
-# property, because that is the checkbox the question is asked with.
-PROPERTY = "WIXUI_EXITDIALOGOPTIONALCHECKBOX"
+
+# THE PROPERTY THAT HOLDS THE ANSWER.
+#
+# IT IS NOT THE CHECKBOX'S OWN PROPERTY, and that is the whole
+# difficulty.
+#
+# The stock ExitDialog's checkbox writes into
+# WIXUI_EXITDIALOGOPTIONALCHECKBOX, and it only APPEARS if that
+# property has a value.  So the value that makes it appear and the
+# value that says the person ticked it are the same property, and
+# they cannot be the same thing:
+#
+#   - if the property is set to 1 so the box shows, the condition
+#     `WIXUI_EXITDIALOGOPTIONALCHECKBOX = "1"` is ALWAYS TRUE, and
+#     the configuration is removed on EVERY uninstall.  MEASURED:
+#     that is exactly what happened.
+#
+#   - if the property is not set, the box does not show at all.
+#
+# SO THE ANSWER IS COPIED INTO A PROPERTY OF OUR OWN, in the UI
+# sequence, just after the dialog that asks the question.  The
+# condition then reads OUR property, which is empty until the person
+# ticks the box.
+# THE PROPERTY THE CONDITION READS IS THE CHECKBOX'S OWN.
+#
+# The stock ExitDialog's checkbox writes "1" into it when it is
+# ticked, and leaves it EMPTY when it is not.  So the condition
+#
+#     WIXUI_EXITDIALOGOPTIONALCHECKBOX = "1"
+#
+# is true exactly when the person ticked the box.
+#
+# And it is NOT given a value in the package, because the box's
+# VISIBILITY is decided by the TEXT property, not by this one.  Give
+# this one a value and the condition is always true.
+CHECKED = "WIXUI_EXITDIALOGOPTIONALCHECKBOX"
+
+# The property the condition reads.
+PROPERTY = CHECKED
 
 # The property that gives the checkbox its value, and so makes it
 # appear at all.
@@ -104,25 +140,58 @@ REMOVE_GUID = "9C1B4A0E-5D77-4E38-9E2F-6B1D3A7C5E90"
 
 # The properties that make the stock checkbox appear, and say what it
 # says.
-PROPERTY_FRAGMENT = """    <!-- THE QUESTION ON THE UNINSTALL PAGE.  The stock WixUI
-         ExitDialog has a checkbox that is hidden unless a property
-         gives it a value, and this gives it one.  So the person is
-         asked, and the answer is the property the removal reads. -->
-    <Property Id="{show}" Value="1" />
+PROPERTY_FRAGMENT = """    <!-- THE QUESTION ON THE UNINSTALL PAGE.
+
+         THE STOCK ExitDialog's CHECKBOX IS SHOWN WHEN THE TEXT
+         PROPERTY HAS A VALUE, and the TEXT property is what the box
+         says.  Its own property is the one the box WRITES, and it is
+         EMPTY until the box is ticked.
+
+         So only the text property is set here.  Setting the
+         checkbox's own property as well is the mistake: it is set to
+         1 so the box appears, and then the condition that reads it
+         is ALWAYS TRUE, and the configuration goes on every
+         uninstall.  MEASURED: that is exactly what happened, and the
+         trace named the action.
+
+         The condition therefore reads the checkbox's own property,
+         which is empty when the box is not ticked and "1" when it
+         is. -->
     <Property Id="{text}" Value="{label}" />
 """
 
 # The directory, and the component that removes it when the person
 # says so.
+# THE CONFIGURATION DIRECTORY.
+#
+# IT IS DECLARED AND NOT FILLED.  There is no <RemoveFolder> in it,
+# because a <RemoveFolder On="uninstall"> removes the directory on
+# EVERY uninstall, and the whole point is that it is removed only
+# when the person says so.
+#
+# There is no way to put a condition on a <RemoveFolder> in WiX v4:
+# a <Condition> ELEMENT is not accepted inside a <Component> or
+# inside a <RemoveFolder>, and neither takes a Condition attribute.
+# So the directory is removed by the CUSTOM ACTION, which does take
+# a condition -- and the directory is declared here so that the
+# action has a directory to work in and the installer knows the
+# path.
 DIRECTORY_FRAGMENT = """      <!-- THE CONFIGURATION DIRECTORY.  It holds the key
            pairs, the key list, the records and the log.  It is
            per-user data, so the uninstaller does not own it: the
            uninstaller ASKS before taking it away.  The keys are
            the identity of a tunnel, so keeping them is the
-           default. -->
+           default.
+           There is no RemoveFolder here on purpose: it cannot be
+           conditioned, so it would remove the directory on EVERY
+           uninstall.  The custom action removes it, and that one
+           CAN be conditioned. -->
       <Directory Id="dir_ljtunnel_state" Name="{sub}">
         <Component Id="cmp_remove_ljtunnel_state" Guid="{guid}">
-          <RemoveFolder Id="rm_ljtunnel_state" On="uninstall" />
+          <RegistryKey Root="HKCU" Key="Software\\ljtunnel">
+            <RegistryValue Name="StateDirectory" Type="string"
+                           Value="{sub}" KeyPath="yes" />
+          </RegistryKey>
         </Component>
       </Directory>
 """
@@ -174,11 +243,74 @@ FEATURE_FRAGMENT = """    <Feature Id="ft_remove_state" Title="Remove the config
 # Where the removal is scheduled.  The condition is an ATTRIBUTE of
 # the Custom element: WiX v4 does not take a Condition element inside
 # one.
-SEQUENCE_FRAGMENT = """  <!-- AND THE CONFIGURATION GOES WHEN THE PERSON SAYS SO. -->
-  <InstallExecuteSequence>
-    <Custom Action="ca_rm_ljtunnel_state" After="RemoveFiles" Condition=\'{prop} = "1"\' />
-  </InstallExecuteSequence>
+# THE ACTION, SCHEDULED.
+#
+# IT IS AN UNINSTALL-TIME ACTION.  Scheduled in the install sequence
+# it runs on EVERY install, and it takes the configuration away in
+# the middle of installing the program that made it -- and when it
+# fails, which it does when the directory is in use, the whole
+# install fails with:
+#
+#     Error 1722: a program run as part of the setup did not finish
+#     as expected
+#
+# MEASURED: that is what the install said, and the trace named the
+# action.
+#
+# SO THE CONDITION SAYS "THE PACKAGE IS BEING REMOVED" AS WELL AS
+# "THE PERSON SAID YES".  Both have to be true.
+#
+# AND THE FRAGMENT DOES NOT BRING ITS OWN <InstallExecuteSequence>
+# ELEMENT: pyappdist's .wxs already has one, and two of them
+# nested is not a sequence.
+# THE SEQUENCE, AND THE TWO ACTIONS.
+#
+# FIRST THE ANSWER IS COPIED.  The checkbox writes into the stock
+# property, and the removal has to read a property of our own, so
+# the value is copied into it.
+#
+# `SetProperty` with a value of "[PropertyName]" copies one
+# property into another, and it is a built-in action, so it needs no
+# code and no elevation.
+#
+# AND IT IS SCHEDULED IN THE UI SEQUENCE, AFTER the dialog that asks
+# the question -- the UI sequence is the one that runs the dialogs,
+# and it runs them before the execute sequence does its work.
+#
+# THEN THE CONFIGURATION GOES, when the copied property says so AND
+# the package is being removed.
+#
+# IT IS AN UNINSTALL-TIME ACTION.  Scheduled in the install sequence
+# without the REMOVE condition it runs on EVERY install, and it
+# takes the configuration away in the middle of installing the
+# program that made it -- and when it fails, which it does when the
+# directory is in use, the whole install fails with:
+#
+#     Error 1722: a program run as part of the setup did not finish
+#     as expected
+SEQUENCE_FRAGMENT = """    <!-- THE CONFIGURATION GOES WHEN THE PERSON SAYS SO, AND
+         WHEN THE PACKAGE IS BEING REMOVED. -->
+    <Custom Action="ca_rm_ljtunnel_state" After="RemoveFiles"
+            Condition=\'{prop} = "1" AND REMOVE = "ALL"\' />
 """
+
+
+# The copy of the answer, and the sequence it goes in.
+COPY_FRAGMENT = """    <!-- THE ANSWER IS COPIED OUT OF THE CHECKBOX'S OWN PROPERTY
+         AND INTO ONE OF OUR OWN, just after the dialog that asks
+         the question.  The removal reads ours. -->
+    <SetProperty Id="sp_copy_checked" Value="[{source}]" Before="RemoveFiles"
+                 Sequence="Execute" />
+"""
+
+UI_SEQUENCE_FRAGMENT = """  <!-- THE QUESTION IS ASKED, AND THEN THE ANSWER IS COPIED.
+       The UI sequence runs the dialogs, and it runs them before the
+       execute sequence does its work. -->
+  <InstallUISequence>
+    <SetProperty Id="sp_copy_checked" Value="[{source}]" After="ExitDialog" />
+  </InstallUISequence>
+"""
+
 
 
 def _insert_before(text: str, marker: str, fragment: str) -> str:
@@ -211,7 +343,7 @@ def add_remove_configuration(wxs: Path,
     if marker not in text:
         return False
     text = _insert_before(text, marker, PROPERTY_FRAGMENT.format(
-        show=SHOW, text=TEXT, label=LABEL))
+        text=TEXT, label=LABEL))
 
     # ---- the directory and its component ----
     #
@@ -246,14 +378,32 @@ def add_remove_configuration(wxs: Path,
 
     # ---- and the sequence ----
     #
-    # pyappdist's .wxs has no execute sequence of its own, so one is
-    # added with the removal in it.
+    # pyappdist's .wxs already has an <InstallExecuteSequence>, and
+    # the action goes INSIDE it.  A fragment that brought its own
+    # element would give two nested ones, which is not a sequence.
     if "<InstallExecuteSequence>" in text:
-        text = _insert_before(text, "  </InstallExecuteSequence>",
-                              SEQUENCE_FRAGMENT.format(prop=PROPERTY))
+        # ---- the LAST closing tag, so the action goes in the
+        #      sequence that is already there and not in one of its
+        #      own ----
+        marker = "  </InstallExecuteSequence>"
+        at = text.rfind(marker)
+        if at < 0:
+            return False
+        text = (text[:at] + SEQUENCE_FRAGMENT.format(prop=CHECKED)
+                + text[at:])
     else:
+        # there is no sequence of its own, so one is made
         text = _insert_before(text, "  </Package>",
-                              SEQUENCE_FRAGMENT.format(prop=PROPERTY))
+                              "  <InstallExecuteSequence>\n"
+                              + SEQUENCE_FRAGMENT.format(prop=CHECKED)
+                              + "  </InstallExecuteSequence>\n")
+
+    # ---- and no copy of the answer is needed ----
+    #
+    # The checkbox's own property IS the answer: it is empty when the
+    # box is not ticked and "1" when it is.  So the condition reads
+    # it directly, and there is nothing to copy and no SetProperty
+    # to get wrong.
 
     wxs.write_text(text, encoding="utf-8", newline="\n")
     return True
@@ -264,7 +414,16 @@ def check(wxs: Path) -> bool:
     if not wxs.is_file():
         return False
     text = wxs.read_text(encoding="utf-8")
+    # NOT "RemoveFolder": there must NOT be one, because it cannot be
+    # conditioned and so it would remove the configuration on every
+    # uninstall.
     return ("ca_rm_ljtunnel_state" in text
-            and "RemoveFolder" in text
+            and "RemoveFolder" not in text
             and "dir_ljtunnel_state" in text
-            and "ft_remove_state" in text)
+            and "ft_remove_state" in text
+            and CHECKED in text
+            # and the checkbox's own property is NOT given a value:
+            # the box shows because of the TEXT property, and giving
+            # this one a value makes the condition always true
+            and f'Id="{CHECKED}"' in text
+            and f'<Property Id="{CHECKED}" Value=' not in text)
