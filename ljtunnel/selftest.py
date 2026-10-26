@@ -851,20 +851,37 @@ def test_firewall_body():
           "-ErrorAction SilentlyContinue" not in add_body,
           "the removal reports what went wrong")
     check("the removal is caught",
-          "catch" in add_body and "exit 3" in add_body,
+          "catch" in add_body and "throw" in add_body,
           "a failed removal stops the script")
+    check("and it THROWS rather than exiting",
+          "exit " not in add_body,
+          "an exit would skip the writing of the answer file")
     check("the removal comes BEFORE the addition",
           add_body.index("Remove-NetFirewallRule")
           < add_body.index("New-NetFirewallRule"),
           "the old rule goes first")
     check("and the delete body is not silent either",
           "-ErrorAction SilentlyContinue" not in del_body
-          and "exit 3" in del_body, del_body[:90])
+          and "throw" in del_body, del_body[:90])
 
     # and the body is one line, so it can be a -Command argument
     # when it has to be
     check("the body has no newline",
           "\n" not in add_body, repr(add_body[:60]))
+
+    # ---- and the script AROUND the body catches the throw ----
+    #
+    # A `throw` inside the body is caught by the script, and the
+    # answer file IS written, with the reason in it.  An `exit`
+    # would skip the writing, and the caller would find nothing
+    # there and learn nothing.
+    script = firewall.elevated_script(add_body, r"C:\Temp\out.txt")
+    check("the script catches the body's throw",
+          "catch" in script and "$_.Exception.Message" in script,
+          script[-180:].strip())
+    check("and it still writes the answer",
+          "Out-File" in script and "exit=" in script,
+          "the caller can read what happened")
 
 
 def test_permit_listen():
