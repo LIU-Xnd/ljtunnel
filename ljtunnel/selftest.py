@@ -520,6 +520,11 @@ def main() -> int:
         except Exception as e:                   # noqa: BLE001
             check(fn.__name__, False, f"raised {type(e).__name__}: {e}")
 
+    dump = os.environ.get("LJT_DUMP")
+    if dump:
+        with open(dump, "w", encoding="utf-8") as fh:
+            for _n, _ok, _d in _results:
+                fh.write(f"{'PASS' if _ok else 'FAIL'}\t{_n}\n")
     passed = sum(1 for _, ok, _ in _results if ok)
     skipped = sum(1 for _, ok, d in _results if ok and "skipped" in d)
     failed = [n for n, ok, _ in _results if not ok]
