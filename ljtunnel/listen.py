@@ -24,15 +24,33 @@ So this end's jobs are:
   - ASSIGN a port per dialer, and tell the dialer which one
   - show what is up
 
-HOW A DIALER GETS ITS PORT
---------------------------
-The panel shows the dialer a one-line command with the port already
-in it. The dialer's public key is in this end's key list. The dialer
-runs the command, and the forwarded port opens here.
+HOW A DIALER IS FOUND
+---------------------
+Nobody adds a dialer to this end.  The dialer arrives, and this end
+sees it.
 
-The port is then THIS end's property: it was assigned here, and it is
-released here when the dialer is removed. A port that is open here
-but belongs to no dialer is a port that something else got into.
+  - the dialer's public key is in this end's key list, with the
+    dialer's NAME attached to it
+  - the dialer asks for a port in the forward range
+  - this end's sshd gives it one, and writes what happened to the log
+  - the panel reads the log and the socket table, and the dialer is
+    THERE
+
+So the panel does not keep a list of dialers.  It keeps a list of
+PORTS THAT ARE OPEN, and the log says who is on each one.
+
+THE DIALER PICKS THE PORT
+-------------------------
+The dialer asks for a port, and if the port is taken it asks for the
+next one.  It cannot ask for port 0 and let sshd choose, because
+`PermitListen` refuses port 0 -- the range and the auto-pick cannot
+be combined, and without a range sshd picks a random high port that
+no firewall rule can name.
+
+And the dialer does not take the client's word for it.  A dialer that
+asks for a port which is ALREADY TAKEN is told "forward success" and
+gets no socket at all.  So the dialer checks the port is really
+listening before it says it is up.
 """
 from __future__ import annotations
 
@@ -42,7 +60,7 @@ import subprocess
 import sys
 import time
 
-from . import paths, sshd
+from . import detect, paths, sshd
 
 # The port this end's own sshd listens on. The dialers log in here.
 LISTEN_SSHD_PORT = 10001
@@ -183,21 +201,84 @@ def access_public_key() -> str:
     return sshd.public_key_of(sshd.ensure_access_key())
 
 
-def add_key(pubkey: str) -> None:
+def add_key(pubkey: str, name: str = "") -> None:
     """Let a key log in to this end's sshd.
 
     The key list is this tunnel's own, not the user's ~/.ssh, so the
     tunnel's access is exactly the access that was handed to it.
+
+    The NAME goes on the KEY, as an environment option:
+
+        environment="LJT_NAME=box-a" ssh-ed25519 AAAA...
+
+    which is what the sshd's own log then reports.  The name is in
+    the KEY LIST and not in anything the client sends, so a client
+    cannot call itself something it is not.
+
+    A key that is already in the list is left alone: the same key
+    added twice is one key, and rewriting it would lose the name
+    that is on it.
     """
     path = paths.authorized_keys()
     lines = []
     if os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as fh:
             lines = [l.rstrip() for l in fh if l.strip()]
+
     key = pubkey.strip()
-    if key and key not in lines:
-        lines.append(key)
+    if not key:
+        return
+    body = key.split()[-2] if len(key.split()) >= 2 else key
+    for i, line in enumerate(lines):
+        if body and body in line:
+            if name and f'{detect.Registry.NAME_VAR}=' not in line:
+                lines[i] = f'environment="{detect.Registry.NAME_VAR}={name}" ' \
+                           + line
+            break
+    else:
+        if name:
+            lines.append(f'environment="{detect.Registry.NAME_VAR}={name}" '
+                         + key)
+        else:
+            lines.append(key)
+    # The list is written on EVERY path, including the one where the
+    # key was already there: the name may be the only thing that
+    # changed, and a name that is not written down is a name nobody
+    # can see.
     sshd.set_authorized_keys(lines)
+
+
+def remove_key(fingerprint: str) -> bool:
+    """Take a key out of the list, by its FINGERPRINT.
+
+    The fingerprint is what the panel has: the key list is read by
+    the sshd, and the log reports the fingerprint, not the text.  So
+    the fingerprint is the handle that joins the two.
+
+    The name goes with the key: a key without its name is a key
+    that shows up as a bare fingerprint, which is harder to read but
+    not wrong.
+    """
+    path = paths.authorized_keys()
+    if not os.path.isfile(path):
+        return False
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [l.rstrip() for l in fh if l.strip()]
+
+    out = []
+    removed = False
+    for line in lines:
+        # the key text is the last two tokens, whatever options come
+        # before it
+        parts = line.split()
+        body = " ".join(parts[-2:]) if len(parts) >= 2 else line
+        if detect._fingerprint_of(body) == fingerprint:
+            removed = True
+            continue
+        out.append(line)
+    if removed:
+        sshd.set_authorized_keys(out)
+    return removed
 
 
 def read_keys() -> list:
@@ -208,22 +289,106 @@ def read_keys() -> list:
         return [l.strip() for l in fh if l.strip()]
 
 
-def start_sshd() -> subprocess.Popen:
+def start_sshd(on_log=None) -> subprocess.Popen:
     """This end's sshd, with remote forwarding allowed.
 
     GatewayPorts clientspecified is the setting that makes the whole
     thing reachable: without it the forwarded port binds to loopback
     and nobody off this machine can connect to it.
+
+    The forward range is in the config as a PermitListen list, so a
+    dialer cannot ask for a port outside it.
+
+    The log level is DEBUG1, because the lines that say which key
+    authenticated and which port it asked for are debug lines.  At
+    INFO the listen end cannot see who is there.
     """
     return sshd.start(LISTEN_SSHD_PORT, listen="0.0.0.0",
-                      gateway_ports=True, allow_forwarding=True)
+                      gateway_ports=True, allow_forwarding=True,
+                      permit_listen=list(range(FIRST_FORWARD_PORT,
+                                               LAST_FORWARD_PORT + 1)),
+                      log_level="DEBUG1",
+                      on_log=on_log)
 
 
-def dialer_command(port: int, user: str = "", host: str = "") -> str:
+class Listener:
+    """The listen end, and the dialers it can see.
+
+    There is no list of dialers here.  There is a list of PORTS THAT
+    ARE OPEN, and the log says who is on each one.
+
+    The registry is fed two ways, and both matter:
+
+      - the log, as the sshd writes it
+      - the socket table, as the OS sees it
+
+    The log says who; the socket table says whether they are still
+    there.  A dialer that has gone leaves its lines in the log and no
+    socket, and the difference between the two is exactly what "it
+    has gone" means.
+    """
+
+    def __init__(self, sshd_port: int = LISTEN_SSHD_PORT,
+                 first_port: int = FIRST_FORWARD_PORT,
+                 count: int = FORWARD_PORT_COUNT):
+        self.sshd_port = sshd_port
+        self.first_port = first_port
+        self.count = count
+        self.registry = detect.Registry(
+            first_port=first_port,
+            count=count,
+            log_path=paths.log_file())
+        self.proc = None
+
+    def start(self) -> subprocess.Popen:
+        """Start the sshd, and start watching the log."""
+        self.proc = sshd.start(
+            self.sshd_port, listen="0.0.0.0",
+            gateway_ports=True, allow_forwarding=True,
+            permit_listen=list(range(self.first_port,
+                                    self.first_port + self.count)),
+            # DEBUG2, not DEBUG1: the line that says which NAME is on
+            # a key is a DEBUG2 line, and at DEBUG1 the name cannot be
+            # learned at all.
+            log_level="DEBUG2",
+            on_log=self._on_log)
+        return self.proc
+
+    def _on_log(self, line: str) -> None:
+        """One line of the sshd's log."""
+        self.registry.absorb([line])
+
+    def dialers(self) -> list:
+        """The dialers that are there RIGHT NOW."""
+        return self.registry.snapshot()
+
+    def free_ports(self) -> list:
+        """The ports in the range that nothing is using."""
+        used = self.registry.ports_in_use()
+        return [p for p in range(self.first_port, self.first_port + self.count)
+                if p not in used]
+
+    def stop(self) -> None:
+        try:
+            if self.proc:
+                self.proc.terminate()
+                self.proc.wait(timeout=8)
+        except Exception:
+            pass
+        sshd.stop()
+
+
+def dialer_command(user: str = "", host: str = "") -> str:
     """The one line the dialer runs.
 
     Copy-pasteable on purpose: the dialer should be one paste, not a
     paragraph of instructions.
+
+    THERE IS NO PORT IN IT.  The dialer finds a free one itself: it
+    asks for the first port in the range, and if the listen end says
+    that one is taken it asks for the next.  So the SAME command works
+    for every dialer, and pasting it on ten boxes is ten dialers with
+    ten different ports and no coordination at all.
 
     The access key is IN the command. That is what makes the setup
     one step instead of three: the dialer takes the key, puts it in
@@ -236,7 +401,7 @@ def dialer_command(port: int, user: str = "", host: str = "") -> str:
     user = user or current_user()
     return (f"ljtunnel dialer --listen-host {host} "
             f"--listen-port {LISTEN_SSHD_PORT} "
-            f"--forward-port {port} --user {user} "
+            f"--user {user} "
             f"--access-key \"{access_public_key()}\"")
 
 

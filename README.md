@@ -20,7 +20,7 @@ sshd. Nothing inbound ever touched B.
 | port | what |
 |---|---|
 | 10001 | this end's own sshd -- where the **dialers** log in |
-| 10002 | the first forwarded port -- where **other people** log in, to reach a dialer |
+| 10002-10021 | the forwarded ports -- where **other people** log in, to reach a dialer |
 
 Both are on the listen end's machine, and they are different things.
 A dialer asking to forward 10002 is not reaching the listen end's
@@ -30,14 +30,18 @@ arrives to the dialer.
 ## Use
 
 On the reachable machine, open the window and press **Start**. It
-shows the ports, the address to use, and the command each dialer runs.
+shows the address to use and the command a dialer runs.
+
+**One thing is done by hand: the dialer's public key.** Paste it into
+the window, with a name if you want one, and the dialer is let in.
+The name goes on the *key*, so a dialer cannot call itself something
+it is not.
 
 On the unreachable machine, run the command the window gives you:
 
 ```bash
 ljtunnel dialer --listen-host <the reachable machine> \
                 --listen-port 10001 \
-                --forward-port 10002 \
                 --user <your name> \
                 --access-key "ssh-ed25519 ..."
 ```
@@ -49,8 +53,29 @@ in.
 Then, from anywhere:
 
 ```bash
-ssh -i <the access key> -p 10002 <your name>@<the reachable machine>
+ssh -i <the access key> -p <the dialer's port> <your name>@<the reachable machine>
 ```
+
+## The dialer is FOUND, not added
+
+There is no list of dialers to keep in step. The dialer arrives, and
+the window sees it: the port it got, the name on its key, and where
+it is. Nobody assigns a port and nobody types a dialer into a form.
+
+The **dialer** finds its own port too. It asks for the first port in
+the range, and if that one is taken it asks for the next -- so the
+same command works on every box, and ten dialers end up on ten
+different ports with no coordination.
+
+The client cannot be believed about this. A dialer that asks for a
+port which is already taken is told `forward success` and gets **no
+socket**, and on Windows the second dialer even takes the port away
+from the first. So the dialer checks the **host key** behind the port
+before it says it is up: that is the only thing there that cannot be
+faked, because it is what the key exchange is built on.
+
+The listen end does the same check the other way round, so it can say
+*which* machine is behind a port and not just that something is.
 
 ## The keys
 
@@ -130,4 +155,7 @@ python -m ljtunnel.guitest      # the window, without showing it
 ```
 
 The cross-machine test is separate: it needs two machines and a port
-the firewall lets through.
+the firewall lets through. It is the real proof -- the listen end on
+one machine, the dialer end on another, and a connection to the
+forwarded port landing on the **dialer's** sshd, with nobody adding
+a dialer to the panel.

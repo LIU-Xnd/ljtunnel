@@ -48,7 +48,7 @@ Port {port}
 ListenAddress {listen}
 HostKey {host_key}
 PidFile {pid_file}
-LogLevel INFO
+LogLevel {log_level}
 
 # A user-level sshd, not a service: there is no PAM to authenticate
 # against, and the strict check wants the SYSTEM sshd's key layout.
@@ -76,6 +76,7 @@ HostKey {host_key}
 # Forwarding: the listen end accepts a remote forward from a dialer;
 # the dialer end does not need to accept one from anyone.
 {forwarding}
+{permit_listen}
 """
 
 
@@ -147,15 +148,37 @@ def ssh_keygen_path() -> str:
 
 def write_config(port: int, listen: str = "0.0.0.0",
                  gateway_ports: bool = False,
-                 allow_forwarding: bool = False) -> str:
-    """Render the sshd config and return its path."""
+                 allow_forwarding: bool = False,
+                 permit_listen: list = None,
+                 log_level: str = "INFO") -> str:
+    """Render the sshd config and return its path.
+
+    permit_listen is the set of ports a dialer may ask to be given.
+    They go on ONE line, space separated, because sshd keeps only the
+    LAST PermitListen line: twenty lines would leave one port.
+    A range (10002-10021) is not accepted -- PermitListen takes a
+    single port, on Windows and on Linux alike.
+    """
     paths.ensure_dir(paths.state_dir())
+    # The paths in the config are ABSOLUTE, and they are the ones
+    # this end really uses.  The state directory is not always under
+    # the home directory -- XDG_STATE_HOME can put it anywhere -- and
+    # a config that names a path the sshd does not use is a config
+    # whose key list is never read.
+    if permit_listen:
+        ports = " ".join(str(p) for p in permit_listen)
+        permit = ("\n# The ports a dialer may be given, on ONE line: sshd\n"
+                  "# keeps only the last PermitListen line.\n"
+                  f"PermitListen {ports}\n")
+    else:
+        permit = ""
     body = _TEMPLATE.format(
         port=port,
         listen=listen,
-        host_key=paths.host_key(),
-        pid_file=paths.pid_file(),
-        authorized_keys=paths.authorized_keys(),
+        log_level=log_level,
+        host_key=_for_sshd(paths.host_key()),
+        pid_file=_for_sshd(paths.pid_file()),
+        authorized_keys=_for_sshd(paths.authorized_keys()),
         win_only=("UsePrivilegeSeparation no\n"
                  if sys.platform == "win32" else ""),
         gateway=("GatewayPorts clientspecified\n"
@@ -163,11 +186,23 @@ def write_config(port: int, listen: str = "0.0.0.0",
         forwarding=("AllowTcpForwarding remote\n"
                     if allow_forwarding else
                     "AllowTcpForwarding no\n"),
+        permit_listen=permit,
     )
     path = paths.sshd_config()
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(body)
     return path
+
+
+def _for_sshd(path: str) -> str:
+    """The path as the sshd wants to read it.
+
+    On Windows the sshd is a C program, and a C program that opens a
+    file with a backslash in the name treats the backslash as an
+    escape in some code paths.  Forward slashes work on both
+    platforms and are what the path means anyway.
+    """
+    return path.replace("\\", "/")
 
 
 def ensure_host_key() -> str:
@@ -252,7 +287,10 @@ def set_authorized_keys(lines: list) -> str:
 
 def start(port: int, listen: str = "0.0.0.0",
           gateway_ports: bool = False,
-          allow_forwarding: bool = False) -> subprocess.Popen:
+          allow_forwarding: bool = False,
+          permit_listen: list = None,
+          log_level: str = "INFO",
+          on_log=None) -> subprocess.Popen:
     """Start this end's sshd, and return the process.
 
     -D keeps it in the foreground, so the caller owns it and can stop
@@ -263,26 +301,79 @@ def start(port: int, listen: str = "0.0.0.0",
     -- and the process holding it has usually changed its title to
     "sshd: /usr/sbin/sshd -f ...", so a pkill on the config path does
     not find it. The pid file is the reliable handle.
+
+    THE LOG GOES DOWN A PIPE, NOT TO A FILE
+    -----------------------------------------
+    On Windows, `-E <file>` holds the log file EXCLUSIVELY: it cannot
+    be read by python, by `cmd /c type`, or by `copy`.  A log nobody
+    can read is no log at all, and the listen end needs to read it --
+    it is where the dialers' names and ports come from.
+
+    So the log goes to STDERR (`-e`) and the parent reads it off a
+    pipe.  The parent writes it to the log file AND hands each line to
+    the on_log callback, so the file is there for a person to look at
+    and the callback is there for the code to use.
+
+    Linux has no `-E` at all, so `-e` is the only way there too.  The
+    two ends of this are the same code, which is the point.
     """
     stop()
 
     ensure_host_key()
     if not os.path.isfile(paths.authorized_keys()):
         set_authorized_keys([])
-    cfg = write_config(port, listen, gateway_ports, allow_forwarding)
+    cfg = write_config(port, listen, gateway_ports, allow_forwarding,
+                       permit_listen, log_level)
 
-    if sys.platform == "win32":
-        # Windows sshd takes -E for the log file.
-        cmd = [sshd_path(), "-f", cfg, "-E", paths.log_file(), "-D"]
-        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-    else:
-        # Linux sshd has no -E. -e sends the log to stderr, and the
-        # file is the one place to look when it will not start.
-        cmd = [sshd_path(), "-f", cfg, "-D", "-e"]
-        _log = open(paths.log_file(), "ab")
-        p = subprocess.Popen(cmd, stdout=_log, stderr=_log)
+    cmd = [sshd_path(), "-f", cfg, "-D", "-e"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT,
+                         text=True, errors="replace", bufsize=1)
+
+    _pump_log(p, on_log)
     return p
+
+
+def _pump_log(proc, on_log=None) -> None:
+    """Read the sshd's log off the pipe, and keep it.
+
+    A child whose stdout is a pipe must have that pipe drained, or the
+    child blocks on a full buffer and never exits.  So this thread
+    runs for the life of the sshd.
+
+    The lines are written to the log file as they arrive, so a person
+    who opens the file while the sshd is running sees what has
+    happened so far, and not just what happened at the end.
+    """
+    import threading
+
+    def _run():
+        try:
+            with open(paths.log_file(), "a", encoding="utf-8",
+                      errors="replace", newline="\n") as fh:
+                for line in proc.stdout:
+                    fh.write(line)
+                    fh.flush()
+                    if on_log:
+                        try:
+                            on_log(line.rstrip("\n"))
+                        except Exception:
+                            # A callback that raises must not take the
+                            # log down with it: the log is the record
+                            # of what sshd did.
+                            pass
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_run, daemon=True,
+                         name="ljtunnel-sshd-log")
+    t.start()
+    return t
 
 
 def stop() -> bool:

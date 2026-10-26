@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import socket
 import subprocess
 import sys
 import tempfile
@@ -91,12 +92,22 @@ def test_config():
             check("the config has the port", "Port 10001" in text)
             check("the config listens on the address asked for",
                   "ListenAddress 0.0.0.0" in text)
-            check("the config points at this end's own host key",
-                  paths.host_key() in text)
-            check("the config points at this end's own key list",
-                  paths.authorized_keys() in text)
-            check("the config points at this end's own pid file",
-                  paths.pid_file() in text)
+
+            # The paths in the config are FORWARD SLASHED, whatever
+            # the platform: the sshd is a C program, and a backslash
+            # in a path it opens is a trapdoor.  So the check is that
+            # the config names the right FILE, not that it spells it
+            # the way the platform would.
+            for what, path in (("host key", paths.host_key()),
+                               ("key list", paths.authorized_keys()),
+                               ("pid file", paths.pid_file())):
+                check(f"the config points at this end's own {what}",
+                      path.replace("\\", "/") in text,
+                      path.replace("\\", "/"))
+            check("the config has no backslash in a path",
+                  "\\" not in text,
+                  "a C program opening a path with a backslash in it "
+                  "is a trapdoor")
             check("the config allows remote forwarding",
                   "AllowTcpForwarding remote" in text)
             check("the config asks for the gateway ports to be reachable",
@@ -191,11 +202,13 @@ def test_access_key():
                   pub.startswith("ssh-") and " " in pub, pub[:40])
             check("the access public key is not empty", bool(pub.strip()))
 
-            cmd = L.dialer_command(10002, "someone", "192.0.2.1")
+            cmd = L.dialer_command("someone", "192.0.2.1")
             check("the dialer command carries the access key",
                   pub in cmd, cmd[:120])
-            check("the dialer command has the forward port",
-                  "--forward-port 10002" in cmd, cmd[:120])
+            check("the dialer command does NOT name a port",
+                  "--forward-port" not in cmd,
+                  "the dialer finds the port itself, so the command "
+                  "must not name one")
             check("the dialer command has the listen port",
                   "--listen-port 10001" in cmd, cmd[:120])
             check("the dialer command has the host",
@@ -223,10 +236,22 @@ def test_dialer():
           "allow_forwarding=True" not in src,
           "the dialer end does not forward for anyone")
     check("the dialer's forwarding goes to its own sshd",
-          'f"0.0.0.0:{args.forward_port}:127.0.0.1:{args.local_port}"' in src,
+          'f"0.0.0.0:{port}:127.0.0.1:{args.local_port}"' in src,
           "the forward must point at the local sshd port")
     check("the dialer does not forward a fixed port",
           "127.0.0.1:1" not in src)
+
+    # ---- the port is FOUND, not given ----
+    #
+    # The dialer asks for a port and, when the listen end says that
+    # one is taken, asks for the next.  So the same command works for
+    # every dialer, and nobody has to keep a list of ports in step.
+    check("the dialer tries more than one port",
+          "_ports_to_try" in src and "for port in ports" in src,
+          "the dialer must be able to move on to the next port")
+    check("the dialer does not take the client's word for it",
+          "_port_is_ours" in src and "host_key_fingerprint" in src,
+          "the client's own 'success' is not proof")
     check("the dialer's key is its own, not the user's",
           "sshd.ensure_client_key()" in src)
     check("the dialer adds the access key to its own key list",
@@ -505,6 +530,180 @@ def test_app():
         check("the window builds", False, f"{type(e).__name__}: {e}")
 
 
+# ------------------------------------------------------------ detection
+
+# The log lines the detector reads.  These are COPIES of what the
+# sshd actually wrote, taken from a real run: the point of the test
+# is that the patterns match the real thing, and a made-up line
+# proves nothing.
+#
+# The address in them is 203.0.113.7 -- TEST-NET-3, which is reserved
+# for documentation and is never routed.  The address that was really
+# there is not written down: an address in a test file is an address
+# somebody will copy, and it will be wrong.
+_LOG_ACCEPT = ("debug1: user: xnd_l: Accepted publickey for xnd_l from "
+               "203.0.113.7 port 48238 ssh2: ED25519 "
+               "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c")
+_LOG_FORWARD = ("debug1: user: xnd_l: server_input_global_request: "
+                "tcpip-forward listen 0.0.0.0 port 20002 [postauth]")
+_LOG_KEY_OPTION = (
+    "debug2: C:/Users/xnd_l/AppData/Local/ljtunnel/"
+    "ljtunnel_authorized_keys:1: check options: "
+    "'environment=\"LJT_NAME=box-a\" ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIPOXAuTF66OZSgkRSFdn+6Hg6z9j9mUubai0zY/eK6VE"
+    " liuxd@zlabm'")
+
+# The fingerprint of that key, as sshd prints it.  It was MEASURED:
+# the detector computes it from the key text and it has to come out
+# the same, or the name can never be joined to the session.
+_FP_A = "SHA256:xht76GglXU2cFU/7Sd14DpDOatAr+zD+qUdGU4vSk7c"
+
+
+def test_detect():
+    """The listen end sees the dialers without being told about them."""
+    from ljtunnel import detect
+
+    # ---- the fingerprint is computed the way sshd prints it ----
+    eq("the fingerprint of a key is computed the way sshd prints it",
+       detect._fingerprint_of(
+           "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPOXAuTF66OZSgkRSFdn+6Hg6z9j9"
+           "mUubai0zY/eK6VE liuxd@zlabm"),
+       _FP_A)
+
+    # ---- the key line gives the NAME ----
+    reg = detect.Registry(first_port=20000, count=20)
+    reg.learn([_LOG_KEY_OPTION])
+    check("the name is learned from the key list",
+          reg.keys_by_fingerprint.get(_FP_A) == "box-a",
+          str(reg.keys_by_fingerprint))
+
+    # ---- the accept line gives the IDENTITY ----
+    reg = detect.Registry(first_port=20000, count=20)
+    reg.learn([_LOG_ACCEPT])
+    check("the key that authenticated is learned",
+          _FP_A in reg._seen, str(list(reg._seen)))
+
+    # ---- the forward line gives the PORT ----
+    reg = detect.Registry(first_port=20000, count=20)
+    reg.learn([_LOG_ACCEPT, _LOG_FORWARD])
+    check("the port is learned from the log",
+          reg._seen.get(_FP_A) and reg._seen[_FP_A].port == 20002,
+          str([(k[:20], v.port) for k, v in reg._seen.items()]))
+
+    # ---- and the two together, with the name ----
+    reg = detect.Registry(first_port=20000, count=20)
+    reg.learn([_LOG_KEY_OPTION, _LOG_ACCEPT, _LOG_FORWARD])
+    d = reg._seen.get(_FP_A)
+    check("the name and the port are joined",
+          d is not None and d.port == 20002
+          and reg.keys_by_fingerprint.get(_FP_A) == "box-a",
+          str(d))
+
+    # ---- a log that says nothing must not invent a dialer ----
+    reg = detect.Registry(first_port=20000, count=20)
+    reg.learn(["debug1: something else entirely", "debug1: noise"])
+    check("a log with no forward has no dialers", not reg._seen,
+          str(list(reg._seen)))
+
+    # ---- a forward with no key is not a dialer either ----
+    reg = detect.Registry(first_port=20000, count=20)
+    reg.learn([_LOG_FORWARD])
+    check("a forward with no key is not a dialer", not reg._seen,
+          str(list(reg._seen)))
+
+
+def test_detect_live():
+    """The detector, against the socket table, with a real port."""
+    from ljtunnel import detect
+
+    # a port that is really open, and one that is not
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+    port = s.getsockname()[1]
+    try:
+        live = detect._listening(port, port)
+        check("a port that is listening is found", port in live,
+              f"{port} in {sorted(live)}")
+
+        reg = detect.Registry(first_port=port, count=1)
+        reg.learn([_LOG_KEY_OPTION, _LOG_ACCEPT, _LOG_FORWARD])
+        d = reg._seen.get(_FP_A)
+        if d:
+            d.port = port
+        snap = reg.snapshot()
+        check("a dialer on an open port is in the snapshot",
+              any(x.port == port for x in snap), str([(x.port, x.name)
+                                                      for x in snap]))
+        check("the name is on it",
+              any(x.port == port and x.name == "box-a" for x in snap),
+              str([(x.port, x.name) for x in snap]))
+
+        # ---- one port has one owner ----
+        #
+        # Two sessions asked for the SAME port, and only one of them
+        # got it: the second was told "forward success" and given
+        # nothing.  The socket table has one owner for the port, so
+        # only one dialer can be on it -- and showing both would tell
+        # a person that two machines are on one port, which is not
+        # true.
+        reg3 = detect.Registry(first_port=port, count=1)
+        reg3.learn([_LOG_KEY_OPTION, _LOG_ACCEPT, _LOG_FORWARD])
+        if _FP_A in reg3._seen:
+            reg3._seen[_FP_A].port = port
+            # a SECOND dialer, with its own key, on the same port
+            other = detect.Dialer(fingerprint="SHA256:someoneelse",
+                                  name="box-b", port=port,
+                                  peer="203.0.113.7")
+            reg3._seen["SHA256:someoneelse"] = other
+        snap3 = reg3.snapshot()
+        check("one port has one owner",
+              len([x for x in snap3 if x.port == port]) == 1,
+              str([(x.port, x.name) for x in snap3]))
+    finally:
+        # The socket is closed LAST: a closed port is not listening,
+        # and the check above needs it to be.
+        s.close()
+
+    # ---- and a port that is NOT open is not in the snapshot ----
+    reg2 = detect.Registry(first_port=port, count=1)
+    reg2.learn([_LOG_KEY_OPTION, _LOG_ACCEPT, _LOG_FORWARD])
+    if _FP_A in reg2._seen:
+        reg2._seen[_FP_A].port = 45999        # a port nothing is on
+    check("a dialer on a closed port is not in the snapshot",
+          not reg2.snapshot(), str([(x.port, x.name)
+                                    for x in reg2.snapshot()]))
+
+
+def test_permit_listen():
+    """The forward range is in the config, on ONE line."""
+    from ljtunnel import sshd
+
+    ports = list(range(20000, 20005))
+    cfg = sshd.write_config(10000, "0.0.0.0", gateway_ports=True,
+                            allow_forwarding=True, permit_listen=ports)
+    text = open(cfg, encoding="utf-8").read()
+    lines = [l for l in text.splitlines() if l.startswith("PermitListen")]
+    eq("there is ONE PermitListen line", len(lines), 1)
+    check("it holds every port in the range",
+          all(str(p) in lines[0] for p in ports), lines[0][:80])
+
+    # sshd keeps only the LAST PermitListen line, so twenty lines
+    # would leave one port.  The check reads the file sshd reads.
+    if sys.platform == "win32":
+        exe = sshd.sshd_path()
+    else:
+        exe = sshd.sshd_path()
+    r = subprocess.run([exe, "-f", cfg, "-T"], capture_output=True, text=True,
+                       errors="replace", timeout=60)
+    out = r.stdout or ""
+    pl = [l for l in out.splitlines() if l.startswith("permitlisten")]
+    check("the sshd keeps every port in the range",
+          bool(pl) and all(f":{p}" in pl[0] for p in ports),
+          (pl[0][:100] if pl else out[-120:]))
+
+
 # ---------------------------------------------------------------- the run
 
 def main() -> int:
@@ -514,7 +713,7 @@ def main() -> int:
                test_dialer,
                test_allocator, test_port_in_use, test_firewall,
                test_dispatcher, test_console, test_address, test_version,
-               test_app):
+               test_app, test_detect, test_detect_live, test_permit_listen):
         try:
             fn()
         except Exception as e:                   # noqa: BLE001
