@@ -33,6 +33,7 @@ import sys
 import time
 
 _results = []
+_skipped = []
 
 
 def check(name, ok, detail=""):
@@ -40,6 +41,22 @@ def check(name, ok, detail=""):
     if not ok:
         print(f"  FAIL  {name}" + (f" -- {detail}" if detail else ""))
     return bool(ok)
+
+
+def skip(name, why=""):
+    """A check that could not be made, and that is NOT a failure.
+
+    THE PROMPT IS A PERSON'S JOB.  The firewall rule needs an
+    administrator, and getting one means a click on the UAC prompt.
+    A person who is not there cannot click it, so "the prompt was not
+    answered" is a check that was NOT MADE -- not a broken thing,
+    and not a passing thing either.
+
+    See ljtunnel.elevate_test for the same treatment.
+    """
+    _skipped.append((name, why))
+    print(f"  SKIP  {name}" + (f" -- {why}" if why else ""))
+    return None
 
 
 def run() -> int:
@@ -74,6 +91,25 @@ def run() -> int:
     ok, msg = FW.add_rule()
     print(f"  add_rule said: {msg!r}")
     check("the elevation reported back", bool(msg), msg[:120])
+
+    # WAS THE PROMPT ANSWERED?
+    #
+    # The rule needs an administrator, and getting one means a click
+    # on the UAC prompt.  A person who is not there cannot click it.
+    # So the checks that need the rule to BE THERE are not made, and
+    # they are not failures either.
+    declined = ("declined" in msg.lower()
+                or "did not happen" in msg.lower()
+                or "not an administrator" in msg.lower()
+                or "access is denied" in msg.lower())
+    if declined or not ok:
+        skip("the rule is in", msg[:120])
+        skip("it covers the sshd port", "the prompt was not answered")
+        skip("it covers the forwarded range", "the prompt was not answered")
+        skip("and it is on the sshd", "the prompt was not answered")
+        skip("pressing it twice leaves one rule",
+             "the prompt was not answered")
+        return _finish()
 
     # ---- the rule is REALLY there ----
     check("the rule is in", FW.rule_exists(), msg[:120])
@@ -126,12 +162,20 @@ def run() -> int:
     check("pressing it twice leaves ONE rule", count == 1, str(count))
 
     print()
+    return _finish()
+
+
+def _finish() -> int:
+    """The summary. Returns 1 when something failed."""
     passed = sum(1 for _, ok, _ in _results if ok)
     failed = [n for n, ok, _ in _results if not ok]
     print(f"  {passed}/{len(_results)} passed"
-          + (f", {len(failed)} failed" if failed else ", 0 failed"))
+          + (f", {len(failed)} failed" if failed else ", 0 failed")
+          + (f", {len(_skipped)} skipped" if _skipped else ""))
     for n in failed:
         print(f"    FAILED: {n}")
+    for n, why in _skipped:
+        print(f"    SKIPPED: {n}" + (f" -- {why}" if why else ""))
     return 1 if failed else 0
 
 

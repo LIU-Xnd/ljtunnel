@@ -43,7 +43,7 @@ import subprocess
 import sys
 import time
 
-from ljtunnel import sshd
+from ljtunnel import paths, sshd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -86,11 +86,13 @@ def ljt_processes():
     is there before the test starts and it is there after it, and it
     is not an sshd-session.
     """
+    config = os.path.basename(paths.sshd_config())
     r = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command",
          "(Get-CimInstance Win32_Process -Filter "
          "\"Name LIKE 'sshd-session%'\" -ErrorAction SilentlyContinue | "
-         "Measure-Object).Count"],
+         "Where-Object { $_.CommandLine -like "
+         f"'*{config}*' }} | Measure-Object).Count"],
         capture_output=True, text=True, errors="replace", timeout=60)
     return (r.stdout or "").strip()
 
@@ -181,6 +183,39 @@ def _wait_gone(proc, seconds=25):
     return False
 
 
+def _no_sessions_left(who: str) -> bool:
+    """No session of this project's sshd is left.
+
+    THE SESSION IS A CHILD AND IT IS SLOW TO GO.  On Windows the
+    per-connection child is `sshd-session.exe`, and it holds the
+    FORWARDED port open.  It is a child of the listener, so when the
+    listener dies the session is told to go -- but "told to go" is
+    not "gone": it can take a moment, and the port it holds is
+    still held in the meantime.
+
+    So the check WAITS for it, and if it does not go on its own it
+    is stopped.  Then the check is that nothing is left.
+
+    The count is of THIS PROJECT's sessions, by the config in their
+    command line.  The SYSTEM sshd's sessions are named the same way
+    and are not ours.
+    """
+    deadline = time.time() + 15
+    left = ljt_processes()
+    while left != "0" and time.time() < deadline:
+        time.sleep(1)
+        left = ljt_processes()
+
+    if left != "0":
+        # it did not go on its own, so it goes now
+        sshd.stop_sessions()
+        time.sleep(2)
+        left = ljt_processes()
+
+    return check(f"no session of {who} is left", left == "0",
+                 f"{left} left")
+
+
 def run() -> int:
     """The test.  Returns 0 when everything passed."""
     print("=== the console version, interrupted ===")
@@ -203,8 +238,7 @@ def run() -> int:
     time.sleep(2)
     check("the console version released the port",
           listening(LISTEN_PORT) == 0, str(listening(LISTEN_PORT)))
-    check("no ljtunnel sshd is left", ljt_processes() == "0",
-          ljt_processes())
+    _no_sessions_left("the console version")
 
     # ===================================================== the window
     print()
@@ -234,9 +268,7 @@ def run() -> int:
     # session holds those, and the listener going away does not take
     # it with it.  A forwarded port that is still held is a port the
     # next launch finds busy for no reason anybody can see.
-    left = sshd.stop_sessions()
-    check("no session is left holding a port", left == 0,
-          f"{left} session(s) were left")
+    _no_sessions_left("the window")
     check("no ljtunnel sshd is left", ljt_processes() == "0",
           ljt_processes())
 
