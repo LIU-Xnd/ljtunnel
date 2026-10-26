@@ -30,6 +30,7 @@ its configuration.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -525,6 +526,18 @@ def _stop_orphans() -> bool:
     import subprocess as _sp
 
     config = os.path.basename(paths.sshd_config())
+    # THE REGEX FORM OF IT, for the PowerShell that searches for it.
+    #
+    # `-like` IS NOT USED, and it is not a style choice: in this
+    # PowerShell the wildcard operator does not work AT ALL --
+    #
+    #     'abc.exe' -like 'abc%'   ->   False
+    #
+    # MEASURED: that is what it says, and `-eq` and `-match` both
+    # work.  So a filter written with `-like` matches NOTHING, and
+    # the count is zero and the cleanup does nothing -- and the
+    # leftovers stay, holding the port.
+    config_re = re.escape(config)
 
     if sys.platform == "win32":
         # THE LISTENER ONLY.  The per-connection children are
@@ -532,7 +545,7 @@ def _stop_orphans() -> bool:
         # a function that stops one thing should not stop another.
         find_ps = ("Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
                    "Where-Object { $_.Name -eq 'sshd.exe' -and "
-                   f"$_.CommandLine -like '*{config}*' }} | "
+                   f"$_.CommandLine -match '{config_re}' }} | "
                    "ForEach-Object { $_.ProcessId }")
     else:
         find_ps = (f"pgrep -f '{config}' 2>/dev/null || true")
@@ -600,14 +613,26 @@ def stop_sessions() -> int:
     import subprocess as _sp
 
     config = os.path.basename(paths.sshd_config())
+    # THE REGEX FORM OF IT, for the PowerShell that searches for it.
+    #
+    # `-like` IS NOT USED, and it is not a style choice: in this
+    # PowerShell the wildcard operator does not work AT ALL --
+    #
+    #     'abc.exe' -like 'abc%'   ->   False
+    #
+    # MEASURED: that is what it says, and `-eq` and `-match` both
+    # work.  So a filter written with `-like` matches NOTHING, and
+    # the count is zero and the cleanup does nothing -- and the
+    # leftovers stay, holding the port.
+    config_re = re.escape(config)
 
     # HOW MANY THERE ARE FIRST, so the answer is the number that were
     # there and not the number that are left.  A count taken AFTER
     # the killing is always zero, and a function that always returns
     # zero cannot say that it did something.
     count_ps = ("(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.Name -like 'sshd-session%' -and "
-                f"$_.CommandLine -like '*{config}*' }} | "
+                "Where-Object { $_.Name -match '^sshd-session' -and "
+                f"$_.CommandLine -match '{config_re}' }} | "
                 "Measure-Object).Count")
 
     try:
@@ -623,8 +648,8 @@ def stop_sessions() -> int:
 
     # and kill them
     kill_ps = ("Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
-               "Where-Object { $_.Name -like 'sshd-session%' -and "
-               f"$_.CommandLine -like '*{config}*' }} | "
+               "Where-Object { $_.Name -match '^sshd-session' -and "
+               f"$_.CommandLine -match '{config_re}' }} | "
                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
                "-ErrorAction SilentlyContinue }")
     try:

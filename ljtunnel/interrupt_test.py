@@ -86,13 +86,27 @@ def ljt_processes():
     is there before the test starts and it is there after it, and it
     is not an sshd-session.
     """
+    import re
+
     config = os.path.basename(paths.sshd_config())
+    # `-match`, NOT `-like`.
+    #
+    # IN THIS POWERSHELL THE WILDCARD OPERATOR DOES NOT WORK:
+    #
+    #     'abc.exe' -like 'abc%'   ->   False
+    #
+    # MEASURED: that is what it says.  `-eq` and `-match` both work.
+    # So a filter written with `-like` matches NOTHING, the count is
+    # zero, and the test passes while the sessions are still there.
+    #
+    # The name filter is in the WQL, not in the PowerShell, and WQL's
+    # LIKE is a different thing that does work.
     r = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command",
          "(Get-CimInstance Win32_Process -Filter "
          "\"Name LIKE 'sshd-session%'\" -ErrorAction SilentlyContinue | "
-         "Where-Object { $_.CommandLine -like "
-         f"'*{config}*' }} | Measure-Object).Count"],
+         "Where-Object { $_.CommandLine -match "
+         f"'{re.escape(config)}' }} | Measure-Object).Count"],
         capture_output=True, text=True, errors="replace", timeout=60)
     return (r.stdout or "").strip()
 

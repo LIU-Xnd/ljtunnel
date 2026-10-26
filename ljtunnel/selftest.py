@@ -1545,6 +1545,53 @@ def test_no_internal_addresses():
     check("no public key in the tracked tree but the fixtures",
           not bad_keys, ", ".join(bad_keys[:8]))
 
+    # ---- AND NO `-like` IN ANY POWERSHELL ----
+    #
+    # IN THIS POWERSHELL THE WILDCARD OPERATOR DOES NOT WORK:
+    #
+    #     'abc.exe' -like 'abc%'   ->   False
+    #
+    # MEASURED: that is what it says, and `-eq` and `-match` both
+    # work.  So a filter written with `-like` matches NOTHING, and
+    # the count is zero, and the cleanup does nothing, and the
+    # leftovers stay holding the port.
+    #
+    # It was in `stop_sessions()`, so the Ctrl-C test counted zero
+    # sessions while two were there -- and the test PASSED.
+    #
+    # `-match` is a REGEX and it works, so it is what is used.  And
+    # the WQL `-Filter "Name LIKE ..."` is a different thing -- it is
+    # the WQL's own LIKE, and it works.
+    bad_like = []
+    for name in names:
+        p = root / name
+        if not p.is_file() or p.suffix not in (".py", ".ps1"):
+            continue
+        # THIS FILE IS THE CHECK, and it NAMES the operator it is
+        # looking for -- in a string and in a comment.  So it is not
+        # a use of it.
+        if p.name == "selftest.py":
+            continue
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for n, line in enumerate(body.splitlines(), 1):
+            # the WQL filter is not PowerShell's operator
+            if "-like" not in line:
+                continue
+            if "Name LIKE" in line:
+                continue
+            # AND A COMMENT IS NOT CODE.  The tree SAYS "-like" in
+            # prose -- it says why it is not used -- and that is not
+            # a use of it.
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            bad_like.append(f"{name}:{n}")
+    check("no PowerShell -like in the tree (it does not work here)",
+          not bad_like, ", ".join(bad_like[:8]))
+
 
 # --------------------------------------------------------- the elevation
 

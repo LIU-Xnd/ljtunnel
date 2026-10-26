@@ -299,6 +299,14 @@ class App(tk.Tk):
                 pass
         self.srv = None
         sshd.stop()
+        # AND THE SESSIONS.  The listener is not enough: on Windows
+        # the per-CONNECTION child holds the FORWARDED port open, so
+        # a session left behind keeps the tunnel's port and the next
+        # launch says the port is busy.
+        try:
+            sshd.stop_sessions()
+        except Exception:
+            pass
         self._set_button("Start")
         self.sshd_var.set("not running")
         self._refresh()
@@ -650,6 +658,12 @@ class App(tk.Tk):
                 pass
         self.srv = None
         sshd.stop()
+        # AND THE SESSIONS, for the same reason as in _stop(): the
+        # per-connection child holds the forwarded port open.
+        try:
+            sshd.stop_sessions()
+        except Exception:
+            pass
 
     def _on_close(self):
         """The window is closing: take the server down with it.
