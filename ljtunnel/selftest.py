@@ -474,7 +474,7 @@ def test_firewall():
 # ---------------------------------------------------------------- dispatcher
 
 def test_dispatcher():
-    from . import __main__ as D
+    from . import cli as D
 
     rc = D.main([])
     check("no arguments prints the usage", rc == 0)
@@ -518,7 +518,7 @@ def test_console():
     BOTH directions: wrong the other way and the Start Menu shortcut
     prints its usage into the void instead of opening the window.
     """
-    from . import __main__ as D
+    from . import cli as D
 
     check("the dispatcher knows whether there is a console",
           isinstance(D.has_console(), bool), str(D.has_console()))
@@ -543,7 +543,7 @@ def test_console():
             fh.write(
                 "import sys, pathlib\n"
                 f"sys.path.insert(0, {parent!r})\n"
-                "import ljtunnel.__main__ as D\n"
+                "import ljtunnel.cli as D\n"
                 f"pathlib.Path({out!r}).write_text(str(D.has_console()))\n")
         pyw = pathlib.Path(sys.executable).with_name("pythonw.exe")
         if not pyw.is_file():
@@ -1141,10 +1141,12 @@ def test_elevation():
 
     # and the dispatcher has to pass it on, or the copy is told
     # "unknown command" and exits
-    disp = (pathlib.Path(__file__).resolve().parent / "__main__.py").read_text(
+    # The dispatcher lives in `cli.py`, so that is where the flag is
+    # handled.  `__main__.py` is a thin shell over it.
+    disp = (pathlib.Path(__file__).resolve().parent / "cli.py").read_text(
         encoding="utf-8")
     check("and the dispatcher passes it on",
-          "elevated" in disp, "__main__.py knows the flag")
+          "elevated" in disp, "cli.py knows the flag")
 
     # ---- and the copy is the SAME app, not another one ----
     #
