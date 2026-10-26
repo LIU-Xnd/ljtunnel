@@ -158,8 +158,18 @@ def main(argv=None) -> int:
 
     # 1. this end's sshd, on its own port
     log("  starting this end's sshd ...")
+    # THIS END'S SSHD PRESENTS THE MACHINE KEY AS ITS HOST KEY.
+    #
+    # The listen end finds its dialers by asking the forwarded port
+    # who is there, and the answer is the host key behind it.  So
+    # the key behind a forwarded port has to be a key the listen end
+    # KNOWS, and the only one it knows is the one the dialer logged
+    # in with.  So the two are the same key.
+    #
+    # One key, two jobs, and it is still one key on disk.
     srv = sshd.start(args.local_port, listen="127.0.0.1",
-                     gateway_ports=False, allow_forwarding=False)
+                     gateway_ports=False, allow_forwarding=False,
+                     host_key=key)
     time.sleep(1.5)
     if srv.poll() is not None:
         log("  the sshd did not start.")

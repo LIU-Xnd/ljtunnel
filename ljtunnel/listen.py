@@ -359,7 +359,31 @@ class Listener:
         self.registry.absorb([line])
 
     def dialers(self) -> list:
-        """The dialers that are there RIGHT NOW."""
+        """The dialers that are there RIGHT NOW.
+
+        THE SCAN IS THE ANSWER ON WINDOWS, AND THE LOG IS THE ANSWER
+        ON LINUX.
+
+        On Windows the sshd's sessions do not log to the listener's
+        pipe, so the log-based registry sees nothing.  The scan does
+        not need the log: the socket table says which ports are open
+        and the host key behind each port says who is there.  See
+        ljtunnel.scan for the whole of it.
+
+        On Linux the sshd's children inherit the pipe, so the log
+        works there, and the log knows the name without a keyscan.
+        Both are used where they work, and the scan is the fallback
+        for the log.
+        """
+        import sys
+
+        if sys.platform == "win32":
+            from . import scan
+            rows = scan.scan_fast(self.first_port, self.count)
+            if rows:
+                return rows
+            # and the log, in case it has something
+            return self.registry.snapshot()
         return self.registry.snapshot()
 
     def free_ports(self) -> list:
@@ -400,7 +424,19 @@ def dialer_command(user: str = "", host: str = "") -> str:
     its own key list, and the end user can log in. Without it the
     person would have to be handed a key and told what to do with it.
 
-    The key is PUBLIC. The private half never leaves the listen end.
+    THE DIALER'S HOST KEY IS ITS MACHINE KEY, so the listen end can
+    NAME it without the sshd's log.
+
+    On Windows the sshd's sessions do not log to the listener's pipe,
+    so the log cannot say who connected.  What CAN say is the host
+    key that answers behind the forwarded port, and the listen end
+    finds the name by looking that key up in its own key list.  So
+    the key behind the port has to be a key the listen end knows,
+    and the only one it knows is the one the dialer logged in with.
+    So on the far side the two are the same key, and nothing extra
+    has to be carried in the command.
+
+    The access key is PUBLIC. No private half leaves either end.
     """
     host = host or local_ipv4()
     user = user or current_user()

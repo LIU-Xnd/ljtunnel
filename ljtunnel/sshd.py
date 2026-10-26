@@ -205,6 +205,7 @@ def write_config(port: int, listen: str = "0.0.0.0",
                  gateway_ports: bool = False,
                  allow_forwarding: bool = False,
                  permit_listen: list = None,
+                 host_key: str = "",
                  log_level: str = "INFO") -> str:
     """Render the sshd config and return its path.
 
@@ -213,6 +214,21 @@ def write_config(port: int, listen: str = "0.0.0.0",
     LAST PermitListen line: twenty lines would leave one port.
     A range (10002-10021) is not accepted -- PermitListen takes a
     single port, on Windows and on Linux alike.
+
+    host_key is the key file this sshd presents.  It is the HOST
+    key by default, and the DIALER end passes its MACHINE key
+    instead -- and that is not tidiness:
+
+    The listen end finds its dialers by asking the forwarded port
+    who is there, and the answer is the host key behind it.  So the
+    host key behind a forwarded port has to be a key the listen end
+    KNOWS, and the only key it knows is the one the dialer logged in
+    with.  So the dialer's sshd presents its machine key as its host
+    key, and the two are the same key.
+
+    One key, two jobs: the dialer's identity to the listen end, and
+    the dialer's identity to whoever connects to the forwarded port.
+    And it is still one key on disk.
     """
     paths.ensure_dir(paths.state_dir())
     # The paths in the config are ABSOLUTE, and they are the ones
@@ -231,7 +247,7 @@ def write_config(port: int, listen: str = "0.0.0.0",
         port=port,
         listen=listen,
         log_level=log_level,
-        host_key=_for_sshd(paths.host_key()),
+        host_key=_for_sshd(host_key or paths.host_key()),
         pid_file=_for_sshd(paths.pid_file()),
         authorized_keys=_for_sshd(paths.authorized_keys()),
         win_only=("UsePrivilegeSeparation no\n"
@@ -345,6 +361,7 @@ def start(port: int, listen: str = "0.0.0.0",
           gateway_ports: bool = False,
           allow_forwarding: bool = False,
           permit_listen: list = None,
+          host_key: str = "",
           log_level: str = "INFO",
           on_log=None) -> subprocess.Popen:
     """Start this end's sshd, and return the process.
@@ -379,7 +396,7 @@ def start(port: int, listen: str = "0.0.0.0",
     if not os.path.isfile(paths.authorized_keys()):
         set_authorized_keys([])
     cfg = write_config(port, listen, gateway_ports, allow_forwarding,
-                       permit_listen, log_level)
+                       permit_listen, host_key, log_level)
 
     cmd = [sshd_path(), "-f", cfg, "-D", "-e"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
