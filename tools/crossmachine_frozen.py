@@ -35,13 +35,13 @@ THE THREE THINGS THAT HAD TO BE RIGHT, and each one cost a run:
     the forwarded port who is there and looks the answer up in the
     key list.
 """
-import contextlib
-import io
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 import paramiko
@@ -164,7 +164,14 @@ else:
 time.sleep(30)
 """.format(win=WIN, lp=LISTEN_PORT, fp=FWD_PORT)
 
-p = pathlib.Path(r"C:\Users\xnd_l\AppData\Local\hermes\cache\scratch\listen41.py")
+# THE LISTENER SCRIPT GOES IN A TEMPORARY DIRECTORY.
+#
+# It was written to a fixed path in a scratch directory, and it
+# stayed there afterwards -- and the next run found the OLD one and
+# a test that was measuring the wrong thing would look like a
+# passing test.
+tmpdir = tempfile.mkdtemp(prefix="ljt-listen-")
+p = pathlib.Path(tmpdir) / "listen.py"
 p.write_text(LISTENER, encoding="utf-8", newline="\n")
 
 proc = subprocess.Popen([PY, str(p)], stdout=subprocess.PIPE,
@@ -310,6 +317,9 @@ check("the ports are free", (r5.stdout or "").strip() == "0",
       f"{(r5.stdout or '').strip()} held")
 
 c.close()
+
+# AND THE TEMPORARY DIRECTORY GOES WITH IT.
+shutil.rmtree(tmpdir, ignore_errors=True)
 
 print()
 print("=== the summary ===")
