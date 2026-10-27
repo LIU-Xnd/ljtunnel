@@ -11,7 +11,7 @@ The traffic is ssh's own. ljtunnel does not implement a tunnel; it sets
 up the ssh one that does.
 """
 
-__version__ = "0.6.5"
+__version__ = "0.6.6"
 
 # THE DISPATCHER IS EXPORTED, so a frozen binary can call it.
 #

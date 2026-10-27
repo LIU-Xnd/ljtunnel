@@ -31,6 +31,28 @@ network.
 And the user in the command is the REACHABLE END's user, because
 the dialer opens an ssh session to the reachable end, and the
 reachable end's sshd refuses a user that does not exist on it.
+
+THE STATE DIRECTORY IS A COPY
+-----------------------------
+This test gets its OWN state directory, and it is a copy of the
+real one -- the keys, the records and all.  It is NOT the real one.
+
+MEASURED: the test cleaned up after itself by removing the record
+and the key it had added, and it did that in the REAL state
+directory.  So a test run took the real dialer's key out of the
+real key list, and the next run of the product could not let that
+dialer in:
+
+    asking for port 10002 ...
+    no: the reachable end did not accept this end's key
+
+And the person on the other end got:
+
+    Permission denied (publickey,keyboard-interactive)
+
+A test that touches the real configuration is a test that breaks
+the product, and the break looks like a bug in the product.  So
+the test works on a copy, and the copy is thrown away.
 """
 import os
 import pathlib
@@ -66,6 +88,54 @@ PASSWORD = os.environ.get("LJT_FAR_PASSWORD", "")
 
 # The reachable end is THIS machine.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+# ---- THE STATE DIRECTORY IS A COPY, AND THIS IS WHERE THE COPY IS MADE.
+#
+# The test adds a key and a record and then removes them again, and
+# if it does that in the REAL state directory it takes the real
+# dialer's key out of the real key list.  MEASURED: that is exactly
+# what happened, and the product then said "the reachable end did not
+# accept this end's key" and the person on the other end got
+# "Permission denied (publickey,keyboard-interactive)".
+#
+# So the copy is made FIRST, before anything is imported that reads
+# the state directory, and `paths.state_dir` is pointed at it.
+import shutil
+import tempfile
+
+from ljtunnel import paths as _paths
+
+_REAL_STATE = _paths.state_dir()
+_COPY_STATE = tempfile.mkdtemp(prefix="ljt-cross-")
+if os.path.isdir(_REAL_STATE):
+    for _name in os.listdir(_REAL_STATE):
+        # THE LOG IS NOT COPIED.  It is megabytes of a previous run's
+        # chatter, the test reads none of it, and copying it made the
+        # test slow.  MEASURED: the copy was 8 MB and took long enough
+        # to be noticed.
+        if _name.endswith(".log"):
+            continue
+        _src = os.path.join(_REAL_STATE, _name)
+        _dst = os.path.join(_COPY_STATE, _name)
+        try:
+            if os.path.isdir(_src):
+                shutil.copytree(_src, _dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(_src, _dst)
+        except OSError:
+            pass
+
+_paths.state_dir = lambda: _COPY_STATE
+
+
+def _drop_the_copy():
+    """The copy goes away, and the real state directory is untouched."""
+    try:
+        shutil.rmtree(_COPY_STATE, ignore_errors=True)
+    except OSError:
+        pass
+
+
 from ljtunnel import listen as _L
 REACHABLE = _L.local_ipv4()
 
@@ -483,6 +553,9 @@ def main():
     L.remove_key(detect._fingerprint_of(fake_key))
     records.remove("thebox")
     c.close()
+    # ---- and the COPY goes away, and the real state directory is
+    #      exactly as it was ----
+    _drop_the_copy()
 
     print()
     print("=== the summary ===")

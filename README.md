@@ -33,10 +33,19 @@ On the reachable machine, open the window and press **Start**. It
 shows the address to use.
 
 **Record the dialer.** Fill in the form -- its name, where it is, who
-logs in, its public key, a note if there is anything worth writing
-down -- and press **Save**. The record is kept, the key goes into the
-listen end's key list so the dialer is let in, and the window prints
-the command that dialer runs.
+logs in to the reachable end, who logs in on the dialer itself, its
+public key, a note if there is anything worth writing down -- and
+press **Save**. The record is kept, the key goes into the listen
+end's key list so the dialer is let in, and the window prints the
+command that dialer runs.
+
+**The two "who logs in" fields are different accounts on different
+machines.** `user there` is an account on the **reachable end** --
+that is who the dialer logs in as. `user on the dialer` is an account
+on the **dialer** -- that is who a person logs in as through the
+forwarded port. Leave either empty and the machine's own account is
+used. [There are two users, and they are on different
+machines](#there-are-two-users-and-they-are-on-different-machines).
 
 **Show the command** puts that command on the clipboard, ready to be
 pasted into a terminal on the other machine. **Copy** does the same
@@ -50,7 +59,8 @@ On the unreachable machine, run the command the window gives you:
 ```bash
 ljtunnel dialer --listen-host <the reachable machine> \
                 --listen-port 10001 \
-                --user <your name> \
+                --user <your name on the reachable end> \
+                --local-user <your name on the dialer> \
                 --access-key "ssh-ed25519 ..."
 ```
 
@@ -61,8 +71,13 @@ in.
 Then, from anywhere:
 
 ```bash
-ssh -i <the access key> -p <the dialer's port> <your name>@<the reachable machine>
+ssh -i <the access key> -p <the dialer's port> \
+    <your name on the DIALER>@<the reachable machine>
 ```
+
+The name there is the dialer's, not the reachable end's. They are
+different accounts and only the dialer's exists where the forwarded
+port lands.
 
 ## A RECORD and a DIALER
 
@@ -353,11 +368,41 @@ LJT_FAR_PASSWORD=... python tools/crossmachine_form.py
 It fills in the form, takes the command from the **clipboard**, runs
 it on the far machine, and watches the dialer arrive by itself.
 
-## The user in the command
+## There are TWO users, and they are on different machines
 
-The command names the **reachable end's** user, not the dialer's own.
-The dialer opens an ssh session to the reachable end, and the
-reachable end's sshd refuses a user that does not exist on it -- so
-the name is a user of the machine the command is going to reach.
+This is the thing to get right, and it is easy to get wrong because
+one command carries both.
 
-Leave the field empty and it is your own user on the reachable end.
+**The dialer logs in to the reachable end.** It opens an ssh session
+to the reachable end and asks for a reverse forward. That session is
+made as an account on the **reachable end**, so the command's
+`--user` is that account. Leave the field empty and it is your own
+user on the reachable end.
+
+**A person connects through the forwarded port.** The forwarded port
+goes to the **dialer's** own sshd, so the account they give is one on
+the **dialer**. That is the `user on the dialer` field, and it ends
+up in the command as `--local-user`.
+
+They are different accounts on different machines, and a name from
+one is not a name on the other:
+
+```
+xnd_l@127.0.0.1: Permission denied (publickey,keyboard-interactive).
+```
+
+That is what it looks like when the name is the reachable end's and
+the connection landed on the dialer. The key was fine.
+
+Leave `user on the dialer` empty and the dialer's own account is
+used. The dialer says which one in its log:
+
+```
+  a person connects through the forwarded port as: liuxd
+```
+
+And a person connects like this, from the reachable end:
+
+```
+ssh -i <the listen end's access key> -p 10002 <the dialer's user>@<the reachable end>
+```

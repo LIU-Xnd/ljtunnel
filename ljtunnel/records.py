@@ -90,7 +90,7 @@ def save(records: list) -> None:
 
 
 def add(name: str, pubkey: str = "", host: str = "", user: str = "",
-        note: str = "") -> dict:
+        note: str = "", local_user: str = "") -> dict:
     """Record a dialer, and return the record.
 
     A record with the same NAME is REPLACED, not duplicated: the
@@ -102,6 +102,10 @@ def add(name: str, pubkey: str = "", host: str = "", user: str = "",
     records = load()
     rec = {
         "name": name,
+        # THE ACCOUNT ON THE DIALER, for the person who connects
+        # through the forwarded port.  It is a different account from
+        # "user", which is the account on the reachable end.
+        "local_user": (local_user or "").strip(),
         "pubkey": (pubkey or "").strip(),
         "host": (host or "").strip(),
         "user": (user or "").strip(),
@@ -153,12 +157,30 @@ def command_for(record: dict) -> str:
     address and the user running it are used, because that is what
     the command needs.
 
-    THE USER IS THE REACHABLE END'S USER.  The dialer opens an ssh
-    session to the reachable end, and the reachable end's sshd
-    refuses a user that does not exist on it -- so the name in the
-    command is a user of the machine the command is going to reach,
-    not a user of the machine the command is run on.  The two are
-    different machines and they have different users.
+    THERE ARE TWO USERS IN THIS PICTURE, AND THEY ARE NOT THE SAME.
+
+    The dialer opens an ssh session to the reachable end, and the
+    reachable end's sshd refuses a user that does not exist on it --
+    so `--user` is a user of the machine the command REACHES, not a
+    user of the machine the command is RUN on.
+
+    And a PERSON who connects through the forwarded port lands on
+    the DIALER's sshd, and that sshd has its own accounts, and the
+    person needs the name of one of THOSE.  The two names belong to
+    two different machines.
+
+    MEASURED, this cost an afternoon:
+
+        xnd_l@127.0.0.1: Permission denied (publickey,keyboard-interactive).
+
+    --user said `xnd_l`, which is the REACHABLE END's user, and the
+    forwarded port goes to the DIALER, which had no such account.
+    The key was fine and the name was not.
+
+    So the command carries BOTH, and says which is which:
+
+        --user       the account on the reachable end
+        --local-user the account on the dialer, for the person
 
     The command does NOT name a port: the dialer finds a free one
     itself, and if the port it asked for is taken it asks for the
@@ -168,7 +190,15 @@ def command_for(record: dict) -> str:
 
     host = (record.get("host") or "").strip() or listen.local_ipv4()
     user = (record.get("user") or "").strip() or listen.current_user()
-    return (f"ljtunnel dialer --listen-host {host} "
-            f"--listen-port {listen.LISTEN_SSHD_PORT} "
-            f"--user {user} "
-            f"--access-key \"{listen.access_public_key()}\"")
+    # THE ACCOUNT ON THE DIALER.  It is not known here -- the dialer
+    # is another machine -- so it is asked for, and the person who
+    # runs the command fills it in.  It is left out entirely when it
+    # is not known, because a wrong name is worse than no name.
+    local_user = (record.get("local_user") or "").strip()
+    cmd = (f"ljtunnel dialer --listen-host {host} "
+           f"--listen-port {listen.LISTEN_SSHD_PORT} "
+           f"--user {user} "
+           f"--access-key \"{listen.access_public_key()}\"")
+    if local_user:
+        cmd += f" --local-user {local_user}"
+    return cmd

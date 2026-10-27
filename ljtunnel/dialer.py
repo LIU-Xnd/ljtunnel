@@ -98,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="this end's own sshd port (default: 10001)")
     p.add_argument("--user", default=None, metavar="NAME",
                    help="the user on the reachable end (default: this one)")
+    p.add_argument("--local-user", default=None, metavar="NAME",
+                   help="the account on THIS machine that a person logs in as "
+                        "through the forwarded port")
     p.add_argument("--access-key", default=None, metavar="PUBKEY",
                    help="the end user's public key, for this end's key list")
     p.add_argument("--accept-new-host-key", action="store_true",
@@ -157,6 +160,21 @@ def main(argv=None) -> int:
     if n_keys == 0:
         log("    (none yet -- until there is one, nobody can log in here)")
     log("")
+    # THE ACCOUNT ON THIS END.  The person who connects through the
+    # forwarded port has to give a name that exists HERE, and this
+    # end's accounts are not the reachable end's accounts.
+    #
+    # MEASURED: "Permission denied (publickey,keyboard-interactive)"
+    # with a key that was perfectly good, because the name was the
+    # reachable end's and not this end's.
+    if args.local_user:
+        log(f"  a person connects through the forwarded port as: "
+            f"{args.local_user}")
+    else:
+        log("  a person connects through the forwarded port as this end's "
+            "own account")
+        log("    (--local-user says which one, if it is not the default)")
+    log("")
 
     if args.print_only:
         return 0
@@ -174,7 +192,7 @@ def main(argv=None) -> int:
     # One key, two jobs, and it is still one key on disk.
     srv = sshd.start(args.local_port, listen="127.0.0.1",
                      gateway_ports=False, allow_forwarding=False,
-                     host_key=key)
+                     host_key=key, allowed_users=args.local_user or "")
     time.sleep(1.5)
     if srv.poll() is not None:
         log("  the sshd did not start.")

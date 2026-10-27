@@ -1507,6 +1507,44 @@ def test_host_key_change():
           "_scan_rows" in _app_src,
           "there is no cache")
 
+    # ---- AND THE CROSS-MACHINE TEST WORKS ON A COPY ----
+    #
+    # A test that adds a key and then removes it must NOT do that in
+    # the real state directory: the key it removes may be the real
+    # dialer's key, and the product then cannot let that dialer in.
+    #
+    # MEASURED: the test ran in the real state directory and the
+    # product said "the reachable end did not accept this end's key".
+    _cross = (_root3 / "tools" / "crossmachine_form.py").read_text(
+        encoding="utf-8", errors="replace")
+    check("the cross-machine test works on a copy of the state",
+          "_paths.state_dir = lambda: _COPY_STATE" in _cross,
+          "the test still uses the real state directory")
+    check("and it throws the copy away",
+          "_drop_the_copy()" in _cross,
+          "the copy is left behind")
+
+    # ---- AND THE COMMAND SAYS WHICH USER IS WHICH ----
+    #
+    # There are TWO users: the one the dialer logs in to the
+    # reachable end as, and the one a person logs in to the DIALER as.
+    # They are accounts on two different machines.
+    #
+    # MEASURED: "Permission denied (publickey,keyboard-interactive)"
+    # with a good key, because the name was the reachable end's.
+    _rec = {"name": "x", "host": "", "user": "", "pubkey": "",
+            "local_user": "someone-else"}
+    _cmd = records.command_for(_rec)
+    check("and the command can say the local account",
+          "--local-user someone-else" in _cmd, _cmd[:120])
+
+    # ---- AND THE SSHD CAN LIMIT THE ACCOUNTS IT ACCEPTS ----
+    _cfg = sshd.write_config(10001, listen="127.0.0.1",
+                             allowed_users="someone")
+    _text = open(_cfg, encoding="utf-8").read()
+    check("and the sshd can say who may log in",
+          "AllowUsers someone" in _text, _cfg)
+
     # ---- AND THE START DOES NOT ASK FOR ADMINISTRATOR RIGHTS ----
     #
     # THE UAC PROMPT IS ON THE SECURE DESKTOP, and it sits there

@@ -168,30 +168,48 @@ class App(tk.Tk):
         ttk.Entry(add, textvariable=self.host_var, width=16).grid(
             row=0, column=3, sticky="w", padx=(4, 12))
 
-        ttk.Label(add, text="user here").grid(row=0, column=4, sticky="w")
+        ttk.Label(add, text="user there").grid(row=0, column=4, sticky="w")
         self.user_var = tk.StringVar(value="")
         self.user_entry = ttk.Entry(add, textvariable=self.user_var, width=10)
         self.user_entry.grid(row=0, column=5, sticky="w", padx=(4, 12))
-        ttk.Label(add, text="(the user on THIS machine -- leave it "
+        ttk.Label(add, text="(the account on the REACHABLE end -- leave it "
                             "empty for yours)").grid(
             row=1, column=0, columnspan=6, sticky="w", pady=(2, 0))
 
-        ttk.Label(add, text="dialer's public key").grid(
+        # THE ACCOUNT ON THE DIALER.  It is a DIFFERENT account from
+        # the one above: the dialer logs in to the reachable end as
+        # "user there", and a PERSON logs in to the DIALER as this
+        # one, through the forwarded port.
+        #
+        # MEASURED: without it the person got
+        # "Permission denied (publickey,keyboard-interactive)" with a
+        # key that was perfectly good -- the name was the reachable
+        # end's and not the dialer's.
+        ttk.Label(add, text="user on the dialer").grid(
             row=2, column=0, sticky="w", pady=(6, 0))
+        self.local_user_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.local_user_var, width=14).grid(
+            row=2, column=1, sticky="w", padx=(4, 12), pady=(6, 0))
+        ttk.Label(add, text="(the account a person logs in as on the "
+                            "DIALER -- leave it empty for its own)").grid(
+            row=2, column=2, columnspan=4, sticky="w", pady=(6, 0))
+
+        ttk.Label(add, text="dialer's public key").grid(
+            row=3, column=0, sticky="w", pady=(6, 0))
         self.key_var = tk.StringVar(value="")
         ttk.Entry(add, textvariable=self.key_var).grid(
-            row=2, column=1, columnspan=5, sticky="ew", padx=(4, 12),
-            pady=(6, 0))
-
-        ttk.Label(add, text="notes").grid(row=3, column=0, sticky="w",
-                                          pady=(6, 0))
-        self.note_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.note_var).grid(
             row=3, column=1, columnspan=5, sticky="ew", padx=(4, 12),
             pady=(6, 0))
 
+        ttk.Label(add, text="notes").grid(row=4, column=0, sticky="w",
+                                          pady=(6, 0))
+        self.note_var = tk.StringVar(value="")
+        ttk.Entry(add, textvariable=self.note_var).grid(
+            row=4, column=1, columnspan=5, sticky="ew", padx=(4, 12),
+            pady=(6, 0))
+
         buttons = ttk.Frame(add)
-        buttons.grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        buttons.grid(row=5, column=0, columnspan=6, sticky="w", pady=(8, 0))
         ttk.Button(buttons, text="Save", command=self._save).pack(side="left")
         ttk.Button(buttons, text="Show the command",
                    command=self._show_command).pack(side="left", padx=6)
@@ -423,7 +441,8 @@ class App(tk.Tk):
                                  "a record needs at least a name")
             return
 
-        rec = records.add(name or key[:24], key, host, user, note)
+        rec = records.add(name or key[:24], key, host, user, note,
+                           local_user=self.local_user_var.get().strip())
         if key:
             L.add_key(key, rec["name"])
             self._append(f"the key is in the list, named {rec['name']}")
@@ -495,6 +514,7 @@ class App(tk.Tk):
             "name": name or "a dialer",
             "host": self.host_var.get().strip(),
             "user": self.user_var.get().strip(),
+            "local_user": self.local_user_var.get().strip(),
             "pubkey": self.key_var.get().strip(),
             "note": self.note_var.get().strip(),
         }
@@ -533,7 +553,8 @@ class App(tk.Tk):
         # and then the live dialers with no record
         for key, d in live.items():
             self._records[key] = {"name": key, "pubkey": "",
-                                   "host": d.peer, "user": "", "note": ""}
+                                   "host": d.peer, "user": "",
+                                   "local_user": "", "note": ""}
             want[key] = (key, str(d.port), "up", d.peer, "")
 
         have = {iid: tuple(self.tree.item(iid, "values"))

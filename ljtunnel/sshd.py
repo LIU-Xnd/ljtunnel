@@ -79,6 +79,7 @@ HostKey {host_key}
 # the dialer end does not need to accept one from anyone.
 {forwarding}
 {permit_listen}
+{allowed_users}
 {penalties}
 """
 
@@ -208,7 +209,8 @@ def write_config(port: int, listen: str = "0.0.0.0",
                  allow_forwarding: bool = False,
                  permit_listen: list = None,
                  host_key: str = "",
-                 log_level: str = "INFO") -> str:
+                 log_level: str = "INFO",
+                 allowed_users: str = "") -> str:
     """Render the sshd config and return its path.
 
     permit_listen is the set of ports a dialer may ask to be given.
@@ -231,6 +233,17 @@ def write_config(port: int, listen: str = "0.0.0.0",
     One key, two jobs: the dialer's identity to the listen end, and
     the dialer's identity to whoever connects to the forwarded port.
     And it is still one key on disk.
+
+    allowed_users is the ACCOUNT on this end that a person may log
+    in as through the forwarded port.  Without it every account on
+    this machine is welcome -- which is the right default for an
+    sshd on a loopback port that only the tunnel can reach.
+
+    MEASURED: the person connecting through the forwarded port was
+    refused with "Permission denied (publickey,keyboard-interactive)"
+    because the name they gave belonged to the REACHABLE END and not
+    to this end.  So the name has to be told to the person, and it
+    has to be this end's name.
     """
     paths.ensure_dir(paths.state_dir())
     # The paths in the config are ABSOLUTE, and they are the ones
@@ -260,6 +273,8 @@ def write_config(port: int, listen: str = "0.0.0.0",
                     if allow_forwarding else
                     "AllowTcpForwarding no\n"),
         permit_listen=permit,
+        allowed_users=(f"AllowUsers {allowed_users}\n"
+                       if allowed_users else ""),
         penalties=_penalties(),
     )
     path = paths.sshd_config()
@@ -365,6 +380,7 @@ def start(port: int, listen: str = "0.0.0.0",
           permit_listen: list = None,
           host_key: str = "",
           log_level: str = "INFO",
+          allowed_users: str = "",
           on_log=None) -> subprocess.Popen:
     """Start this end's sshd, and return the process.
 
@@ -398,7 +414,7 @@ def start(port: int, listen: str = "0.0.0.0",
     if not os.path.isfile(paths.authorized_keys()):
         set_authorized_keys([])
     cfg = write_config(port, listen, gateway_ports, allow_forwarding,
-                       permit_listen, host_key, log_level)
+                       permit_listen, host_key, log_level, allowed_users)
 
     cmd = [sshd_path(), "-f", cfg, "-D", "-e"]
     p = quiet.popen_hidden(cmd, stdout=subprocess.PIPE,

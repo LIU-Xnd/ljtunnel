@@ -173,6 +173,9 @@ def run() -> int:
     a.name_var.set("anotherbox")
     a.host_var.set("192.0.2.9")
     a.user_var.set("someone")
+    # THE ACCOUNT ON THE DIALER, which is a DIFFERENT account from
+    # the one above.
+    a.local_user_var.set("dialer-account")
     a.key_var.set(_FAKE_KEY)
     a.note_var.set("the far box")
     a._save()
@@ -197,6 +200,11 @@ def run() -> int:
     check("the command names the dialer", "ljtunnel dialer" in cmd, cmd[:80])
     check("the command names the address", "192.0.2.9" in cmd, cmd[:80])
     check("the command names the user", "--user someone" in cmd, cmd[:80])
+    # THE ACCOUNT ON THE DIALER, which is not the same account as
+    # the one above.  MEASURED: without it the person got
+    # "Permission denied (publickey,keyboard-interactive)".
+    check("the command names the account on the dialer",
+          "--local-user dialer-account" in cmd, cmd[:120])
     check("the command carries the access key", "ssh-ed25519" in cmd, cmd[:80])
     check("the command does NOT name a port", "--forward-port" not in cmd,
           "the dialer finds the port itself")
