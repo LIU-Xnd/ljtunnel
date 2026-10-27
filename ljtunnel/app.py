@@ -855,30 +855,32 @@ def main(argv=None) -> int:
         _record_start("elevated")
         return _run_window(argv)
 
-    if sys.platform == "win32" and not elevate.is_admin():
-        started, why = elevate.relaunch_elevated(argv)
-        if started:
-            # The elevated copy is running now.  This one has to go:
-            # two windows would be two panels showing the same state,
-            # and this one cannot do the work.
-            #
-            # The record is written by the ELEVATED copy, which is
-            # the one that is actually running.  This one writes
-            # "handing over" so that a record left behind by a
-            # crash is not read as "the app is running".
-            _record_start("handing over")
-            return 0
-        # The person said no, or the elevation did not happen.  Carry
-        # on without it: the firewall button asks for it on its own.
-        if why == "the UAC prompt was declined":
-            print("the UAC prompt was declined -- the firewall rule "
-                  "will ask for the elevation by itself", file=sys.stderr)
-        else:
-            print("could not run as an administrator: " + why,
-                  file=sys.stderr)
-        _record_start("plain")
-    else:
-        _record_start("elevated")
+    # THE WINDOW COMES UP FIRST, AND THE ELEVATION IS ASKED FOR
+    # AFTERWARDS -- OR NEVER.
+    #
+    # THE APP USED TO ASK AT THE START, and the UAC prompt is on the
+    # SECURE DESKTOP: Windows takes the screen over for it, and it
+    # sits there until somebody answers it.  So a person who was not
+    # at the machine saw NOTHING -- no window, no message, and the
+    # app looked broken.
+    #
+    # MEASURED: the launcher printed the usage and exited, and the
+    # window never came up.
+    #
+    # And `ShellExecuteEx` BLOCKS until the prompt is answered, so
+    # the window could not be shown first even if it had been asked
+    # for later in the same breath.
+    #
+    # So the window opens FIRST, and the elevation is a BUTTON --
+    # there has been one all along.  The button is for the person who
+    # wants the administrator rights, and the app works without them:
+    # the firewall rule asks for the elevation on its own, for that
+    # one step.
+    #
+    # So NOTHING BLOCKS THE START.  A person who is not at the
+    # machine gets a window.
+    _record_start("elevated" if (sys.platform != "win32"
+                                 or elevate.is_admin()) else "plain")
 
     return _run_window(argv)
 

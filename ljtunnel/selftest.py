@@ -1455,6 +1455,29 @@ def test_host_key_change():
           "gui_entry" in (_root / "pyproject.toml").read_text(
               encoding="utf-8", errors="replace"))
 
+    # ---- AND THE START DOES NOT ASK FOR ADMINISTRATOR RIGHTS ----
+    #
+    # THE UAC PROMPT IS ON THE SECURE DESKTOP, and it sits there
+    # until somebody answers it.  So an app that asks at the start
+    # shows NOTHING to a person who is not at the machine: no
+    # window, no message, and the app looks broken.
+    #
+    # MEASURED: the shortcut "would not run" and nothing appeared.
+    #
+    # So the window comes up FIRST and the elevation is a BUTTON.
+    _root2 = pathlib.Path(__file__).resolve().parent.parent
+    _app = (_root2 / "ljtunnel" / "app.py").read_text(encoding="utf-8",
+                                                      errors="replace")
+    _main_at = _app.find("def main(argv=None) -> int:")
+    assert _main_at > 0
+    _body = _app[_main_at:_main_at + 4000]
+    check("the start does not ask for administrator rights",
+          "relaunch_elevated" not in _body.split("def _run_window")[0],
+          "the start asks for the elevation")
+    check("and the button is there for it",
+          "_ask_to_be_admin" in _app,
+          "there is no button")
+
     # ---- and the option is there ----
     #
     # IT IS AN EXPLICIT ACT.  The host key is the one thing in this
