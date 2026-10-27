@@ -163,24 +163,61 @@ def scan_fast(first_port: int, count: int, timeout: float = 12.0) -> list:
     that refreshes every second take three seconds.  So the ports
     are scanned at the same time, and the panel waits for the
     slowest one instead of for the sum.
+
+    **AND A FINGERPRINT THAT IS ALREADY KNOWN IS NOT LOOKED FOR
+    AGAIN.**  The host key behind a port does not change while the
+    dialer is there -- it is the dialer's own host key, and the
+    dialer is the one holding the connection.  So a port that was
+    seen before is remembered, and the cache is what makes the panel
+    cheap.
+
+    MEASURED: the keyscan takes ten seconds on a port that is not
+    answering -- `ssh-keyscan -T 10` waits for the timeout -- and the
+    panel asked for it every second.
+
+    AND THE CACHE IS BY THE PORT AND THE OWNER, so a port that
+    changes hands is looked at again: the pid is in the key, because
+    a different process on the same port is a different machine.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     last = first_port + count - 1
     listening = _listening(first_port, last)
     if not listening:
+        _cache.clear()
         return []
 
     names = _keys_with_names()
     ports = sorted(listening)
 
-    with ThreadPoolExecutor(max_workers=min(8, len(ports))) as pool:
-        fps = list(pool.map(
-            lambda p: host_key_fingerprint(p, "127.0.0.1", timeout=timeout),
-            ports))
+    # ---- the ones that are already known ----
+    todo = []
+    fps = {}
+    for port in ports:
+        pid = listening[port]
+        key = (port, pid)
+        if key in _cache:
+            fps[port] = _cache[key]
+        else:
+            todo.append(port)
+
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+            found = list(pool.map(
+                lambda p: host_key_fingerprint(p, "127.0.0.1", timeout=timeout),
+                todo))
+        for port, fp in zip(todo, found):
+            fps[port] = fp
+            _cache[(port, listening[port])] = fp
+
+    # ---- and the ones that are gone are forgotten ----
+    live_keys = {(p, listening[p]) for p in ports}
+    for key in [k for k in _cache if k not in live_keys]:
+        del _cache[key]
 
     out = []
-    for port, fp in zip(ports, fps):
+    for port in ports:
+        fp = fps.get(port, "")
         name = names.get(fp, "") if fp else ""
         out.append(Dialer(
             fingerprint=fp,
@@ -189,3 +226,11 @@ def scan_fast(first_port: int, count: int, timeout: float = 12.0) -> list:
             alive=True,
         ))
     return out
+
+
+# The fingerprints that are already known: (port, pid) -> fingerprint.
+#
+# IT IS A MODULE LEVEL THING on purpose: the panel asks again every
+# second, and the thing that makes the ask cheap is that the answer
+# is remembered.
+_cache: dict = {}

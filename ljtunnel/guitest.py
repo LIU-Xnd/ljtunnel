@@ -129,11 +129,24 @@ def run() -> int:
     if _FP in reg._seen:
         reg._seen[_FP].port = port
 
+    # THE SCAN IS ON A THREAD, so the answer comes a moment later.
+    # The window draws what the scan found, so the test WAITS for the
+    # scan and then lets the window draw it.
+    #
+    # MEASURED: this is why the scan is on a thread at all -- the
+    # question takes time, and the window must not wait for it.
+    for _ in range(40):
+        a._last_scan = 0.0
+        a._scanning = False
+        a.update()
+        if a._scan_rows:
+            break
+        time.sleep(0.1)
     a._refresh()
     a.update_idletasks()
     rows = a.tree.get_children()
     check("a dialer that arrives shows up by itself", len(rows) == 1,
-          str(rows))
+          str(rows) + " -- the scan found " + str(len(a._scan_rows)))
     if rows:
         vals = a.tree.item(rows[0], "values")
         check("the row has the name", vals[0] == "testbox", str(vals))

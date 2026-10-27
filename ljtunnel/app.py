@@ -28,6 +28,7 @@ than an "access denied" with no explanation.
 from __future__ import annotations
 
 import os
+import time
 import queue
 import subprocess
 import sys
@@ -49,7 +50,17 @@ except ImportError:                     # running from a source tree
     from ljtunnel import paths, records, sshd
 
 APP_TITLE = "ljtunnel listen"
-POLL_MS = 1000
+# HOW OFTEN THE PANEL IS DRAWN, AND HOW OFEN THE SOCKET TABLE IS ASKED
+# FOR.
+#
+# THE TWO ARE NOT THE SAME.  Drawing is cheap and asking is not, so
+# the window is drawn often and the question is asked less often.
+#
+# MEASURED: the question took 1.85 seconds, and the timer asked every
+# second, so the window was always behind and froze most of every
+# second.
+REFRESH_MS = 250
+POLL_S = 3.0
 
 
 class App(tk.Tk):
@@ -64,6 +75,11 @@ class App(tk.Tk):
         self._closed = False
         self._interrupted = False
         self._records = {}
+        # WHAT IS THERE, AS THE LAST SCAN SAW IT.  The window
+        # draws this and never waits for a new answer.
+        self._scan_rows = []
+        self._last_scan = 0.0
+        self._scanning = False
         # The dialers are NOT a list this end keeps.  They are what
         # the sshd's own log and the socket table say is there, and
         # they are read afresh every time the panel is drawn.
@@ -74,7 +90,7 @@ class App(tk.Tk):
                            else "not an administrator")
         self._after_ids = set()
         self._after_ids.add(self.after(120, self._drain))
-        self._after_ids.add(self.after(POLL_MS, self._poll))
+        self._after_ids.add(self.after(REFRESH_MS, self._poll))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _install_sigint(self)
 
@@ -240,15 +256,56 @@ class App(tk.Tk):
             self._after_ids.add(self.after(120, self._drain))
 
     def _poll(self):
-        """Keep the panel current, and notice a Ctrl-C."""
+        """Keep the panel current, and notice a Ctrl-C.
+
+        **THE PANEL IS DRAWN FROM THE THREAD THAT DOES THE WORK.**  The
+        refresh asks the operating system for the socket table, and
+        that is a question that takes time -- and a question asked
+        from the thread that draws the window makes the window wait
+        for the answer.
+
+        MEASURED: the socket table came from PowerShell, and one call
+        took 1.85 seconds.  The timer asked for it every second, so
+        the window was ALWAYS behind: it froze for most of every
+        second, over and over.
+
+        So the answer is cached, and the cache is filled by a thread
+        that does not draw anything, and the window only ever reads
+        what is already there.
+        """
         if self._closed:
             return
         if self._interrupted:
             self._append("Ctrl-C: stopping ...")
             self._on_close()
             return
+
+        # ---- is it time to ask again? ----
+        now = time.time()
+        if (not self._scanning) and now - self._last_scan >= POLL_S:
+            self._last_scan = now
+            self._scanning = True
+            threading.Thread(target=self._scan, daemon=True).start()
+
+        # ---- and draw what is already known ----
         self._refresh()
-        self._after_ids.add(self.after(POLL_MS, self._poll))
+        self._after_ids.add(self.after(REFRESH_MS, self._poll))
+
+    def _scan(self):
+        """Ask the operating system what is there.  Not on the main thread.
+
+        THE ANSWER IS CACHED, so the window never waits for it.
+
+        AND ONLY ONE SCAN AT A TIME: a scan that is slower than the
+        interval would start another one on top of it, and the machine
+        would end up running more and more of them.
+        """
+        try:
+            self._scan_rows = self.listener.dialers()
+        except Exception:
+            self._scan_rows = []
+        finally:
+            self._scanning = False
 
     # ------------------------------------------------------------ the server
 
@@ -261,6 +318,10 @@ class App(tk.Tk):
     def _start(self):
         self._append("starting ...")
         self._set_button("Stop")
+        # THE FIRST SCAN, right away: the panel is empty until the
+        # answer comes, and the answer is what the panel is about.
+        self._last_scan = 0.0
+        self._scanning = False
         # The server runs in a thread: the window's after() loop has
         # to stay on the main thread, and tkinter from another thread
         # is the usual way a program crashes at random.
@@ -452,7 +513,7 @@ class App(tk.Tk):
 
         # the dialers that are up, by name
         live = {}
-        for d in self.listener.dialers():
+        for d in list(self._scan_rows):
             live[d.name or d.fingerprint] = d
 
         # the records first: a record is a row whether or not its

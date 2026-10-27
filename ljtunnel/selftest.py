@@ -1455,6 +1455,58 @@ def test_host_key_change():
           "gui_entry" in (_root / "pyproject.toml").read_text(
               encoding="utf-8", errors="replace"))
 
+    # ---- AND THE PANEL DOES NOT ASK THE OS ON THE MAIN THREAD ----
+    #
+    # THE WINDOW FREEZED EVERY SECOND, and the reason was the
+    # question and not the drawing: the socket table came from
+    # PowerShell, and ONE CALL TOOK 1.85 SECONDS.  The timer asked
+    # for it every second, so the window was always behind.
+    #
+    # MEASURED, on this machine:
+    #
+    #     powershell + Get-NetTCPConnection   1.75s
+    #     netstat -ano                          0.025s
+    #
+    # So the question comes from netstat now, and it is asked by a
+    # THREAD, and the window draws what is already known.
+    import time as _time2
+
+    _root3 = pathlib.Path(__file__).resolve().parent.parent
+    _detect = (_root3 / "ljtunnel" / "detect.py").read_text(
+        encoding="utf-8", errors="replace")
+    # THE CODE, NOT THE WORDS: the docstring may say what it used
+    # to do, and a guard that reads the words fails on a comment.
+    #
+    # So the docstrings are taken out and the comments are dropped,
+    # and what is left is what would RUN.
+    import re as _re3
+
+    _code = _re3.sub('"""(?:.|' + chr(10) + ')*?"""', "", _detect)
+    _code = "\n".join(l for l in _code.splitlines()
+                       if not l.strip().startswith("#"))
+    check("the socket table does not come from PowerShell",
+          "powershell" not in _code.lower(),
+          "the socket table still comes from PowerShell")
+
+    _t0 = _time2.time()
+    _live = detect._listening(10002, 10021)
+    _t1 = _time2.time()
+    check("and the question is quick", (_t1 - _t0) < 0.5,
+          f"it took {(_t1 - _t0):.3f}s")
+
+    # ---- and the drawing is off the question ----
+    _app_src = (_root3 / "ljtunnel" / "app.py").read_text(
+        encoding="utf-8", errors="replace")
+    _refresh_at = _app_src.find("def _refresh(self)")
+    _poll_at = _app_src.find("def _poll(self)")
+    _poll_body = _app_src[_poll_at:_app_src.find("\n    def ", _poll_at + 10)]
+    check("and the poll does not ask the OS itself",
+          "self.listener.dialers()" not in _poll_body,
+          "the poll asks the OS on the main thread")
+    check("and the answer is cached",
+          "_scan_rows" in _app_src,
+          "there is no cache")
+
     # ---- AND THE START DOES NOT ASK FOR ADMINISTRATOR RIGHTS ----
     #
     # THE UAC PROMPT IS ON THE SECURE DESKTOP, and it sits there
