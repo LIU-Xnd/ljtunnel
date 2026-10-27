@@ -198,7 +198,16 @@ for m in list(sys.modules):
 sys.path = [p for p in sys.path if "site-packages" not in p]
 sys.path.insert(0, r"{win}")
 from ljtunnel import listen as L, sshd
-L.add_key({key!r}, "thefrozenbox")
+
+# THE NAME IS SET, NOT ADDED.  The key list is SHARED with the other
+# cross-machine test, and `add_key` LEAVES A KEY THAT IS ALREADY IN
+# THE LIST ALONE -- so the name the other test put on it would stay,
+# and this test's name would never appear.
+#
+# MEASURED: the other test ran first and named the key "thebox", and
+# this one then saw "thebox" where it expected "thefrozenbox" --
+# while the tunnel worked and the detection found the dialer.
+L.set_key_name({key!r}, "thefrozenbox")
 sshd.set_authorized_keys(L.read_keys())
 print("  the key is in the list")
 """.format(win=WIN, key=machine_key)
