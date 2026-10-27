@@ -382,9 +382,22 @@ def main():
     # ---- the reachable end sees the dialer arrive ----
     print()
     print("=== the reachable end sees it ===")
+    # THE SCAN IS ON A THREAD, so the answer comes a moment later and
+    # the window draws what the last scan found.  So the test asks
+    # for a scan and waits for it, the way the window does.
+    #
+    # MEASURED: the test only called the refresh, and the refresh
+    # reads the cache -- so the panel stayed empty and the test
+    # failed with the tunnel actually working.
     seen = []
     for _ in range(30):
+        a._last_scan = 0.0
+        a._scanning = False
         a.update()
+        for _ in range(20):
+            if a._scan_rows:
+                break
+            time.sleep(0.1)
         a._refresh()
         a.update_idletasks()
         seen = [a.tree.item(i, "values")
