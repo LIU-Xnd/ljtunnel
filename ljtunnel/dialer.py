@@ -99,6 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the user on the reachable end (default: this one)")
     p.add_argument("--access-key", default=None, metavar="PUBKEY",
                    help="the end user's public key, for this end's key list")
+    p.add_argument("--accept-new-host-key", action="store_true",
+                   help="accept the reachable end's host key even if it "
+                        "is not the one this end remembers -- use it "
+                        "after the reachable end has been reinstalled")
     p.add_argument("--print-only", action="store_true",
                    help="print what this would do and exit")
     return p
@@ -213,25 +217,43 @@ def main(argv=None) -> int:
     now = detect.host_key_fingerprint(args.listen_port, args.listen_host,
                                       timeout=15)
     if now and known and now != known:
+        if not getattr(args, "accept_new_host_key", False):
+            log("")
+            log(f"  THE REACHABLE END'S HOST KEY CHANGED.")
+            log(f"    it was:  {known}")
+            log(f"    it is:   {now}")
+            log("")
+            log("  That is not a tunnel problem: the reachable end is")
+            log("  presenting a different key than this end remembers.")
+            log("  It happens when the reachable end's configuration was")
+            log("  cleared and the keys were made again.")
+            log("")
+            log("  If you know the reachable end was reinstalled, say so")
+            log("  and this end will take the new key:")
+            log("")
+            log("    ljtunnel dialer ... --accept-new-host-key")
+            log("")
+            log("  Otherwise this end's memory of it stays where it is,")
+            log("  because the host key is the one thing in this")
+            log("  protocol that cannot be faked.")
+            _kill(srv)
+            sshd.stop()
+            return 1
+
+        # ---- AND THE PERSON SAID SO ----
+        #
+        # The old key is TAKEN AWAY, not just ignored: the next run
+        # has to find one key and not two, or the comparison is
+        # against whichever the file lists first.
         log("")
-        log(f"  THE REACHABLE END'S HOST KEY CHANGED.")
+        log("  the reachable end's host key CHANGED, and you said to")
+        log("  accept it.")
         log(f"    it was:  {known}")
         log(f"    it is:   {now}")
         log("")
-        log("  That is not a tunnel problem: the reachable end is")
-        log("  presenting a different key than this end remembers.")
-        log("  It happens when the reachable end's configuration was")
-        log("  cleared and the keys were made again.")
-        log("")
-        log("  If you know the reachable end was reinstalled, take")
-        log("  this end's memory of it away:")
-        log("")
-        log(f"    rm {os.path.join(paths.state_dir(), 'known_hosts')}")
-        log("")
-        log("  and start the dialer again.")
-        _kill(srv)
-        sshd.stop()
-        return 1
+        log("  This end's memory of the old key is taken away, so the")
+        log("  next run compares against the new one.")
+        _forget_known_host(args.listen_host, args.listen_port)
 
     fwd = None
     got = 0
@@ -375,6 +397,32 @@ def _known_host_key(host: str, port: int) -> str:
             if part.startswith(("ssh-", "ecdsa-", "sk-")) and i + 1 < len(parts):
                 return detect._fingerprint_of(" ".join(parts[i:]))
     return ""
+
+
+def _forget_known_host(host: str, port: int) -> bool:
+    """Take this end's memory of the reachable end's host key away.
+
+    THE FILE IS IN THE HASHED FORM, so the line is found by asking
+    ssh for it -- `ssh-keygen -F` knows the hash -- and then it is
+    removed by asking ssh to do it, because ssh wrote it and ssh
+    knows how to take it out again.
+    """
+    import subprocess
+
+    kf = os.path.join(paths.state_dir(), "known_hosts")
+    if not os.path.isfile(kf):
+        return False
+
+    for args in (["-R", f"[{host}]:{port}", "-f", kf],
+                 ["-R", host, "-f", kf]):
+        try:
+            r = subprocess.run(["ssh-keygen"] + args, capture_output=True,
+                               text=True, errors="replace", timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0:
+            return True
+    return False
 
 
 def _refusal_reason(stderr: str) -> str:

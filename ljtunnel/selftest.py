@@ -1271,6 +1271,54 @@ def test_host_key_change():
           detect._fingerprint_of(key) == want,
           detect._fingerprint_of(key)[:40])
 
+    # ---- AND THE OLD KEY CAN BE TAKEN AWAY ----
+    #
+    # It is taken away by asking ssh to do it, because ssh wrote it
+    # and ssh knows how to remove it -- and the file is in the
+    # hashed form, so a line cannot be found by reading it.
+    import subprocess
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory() as tmp:
+        kf = os.path.join(tmp, "known_hosts")
+        plain = os.path.join(tmp, "plain")
+        with open(plain, "w", encoding="utf-8") as fh:
+            fh.write("[203.0.113.7]:10000 " + key + "\n")
+        subprocess.run(["ssh-keygen", "-f", plain, "-H"], capture_output=True,
+                       text=True, errors="replace", timeout=60)
+        with open(plain, encoding="utf-8", errors="replace") as fh:
+            hashed = fh.read()
+        with open(kf, "w", encoding="utf-8", newline="\n") as fh2:
+            fh2.write(hashed)
+
+        old_dir = paths.state_dir
+        paths.state_dir = lambda: tmp
+        try:
+            got = dialer._known_host_key("203.0.113.7", 10000)
+            check("the remembered host key is read from the known_hosts",
+                  got == want, f"{str(got)[:40]} -- the file was: {hashed[:60]}")
+
+            check("the old key can be taken away",
+                  dialer._forget_known_host("203.0.113.7", 10000))
+            check("and then there is nothing left to remember",
+                  dialer._known_host_key("203.0.113.7", 10000) == "",
+                  dialer._known_host_key("203.0.113.7", 10000)[:40])
+        finally:
+            paths.state_dir = old_dir
+
+    # ---- and the option is there ----
+    #
+    # IT IS AN EXPLICIT ACT.  The host key is the one thing in this
+    # protocol that cannot be faked, so taking the new one is a
+    # decision somebody makes, not something the dialer does on its
+    # own.
+    import subprocess as _sp
+    r = _sp.run([sys.executable, "-m", "ljtunnel", "dialer", "--help"],
+                capture_output=True, text=True, errors="replace", timeout=90)
+    check("the dialer can be told to accept a new host key",
+          "--accept-new-host-key" in (r.stdout or ""),
+          (r.stdout or r.stderr or "").strip()[:80])
+
     # ---- and the remembered key is read from the known_hosts ----
     #
     # THE FILE IS IN THE HASHED FORM, and then the key is the
@@ -1297,15 +1345,6 @@ def test_host_key_change():
             hashed = fh.read()
         with open(kf, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(hashed)
-
-        old_dir = paths.state_dir
-        paths.state_dir = lambda: tmp
-        try:
-            got = dialer._known_host_key("203.0.113.7", 10000)
-        finally:
-            paths.state_dir = old_dir
-        check("the remembered host key is read from the known_hosts",
-              got == want, f"{str(got)[:40]} -- the file was: {hashed[:60]}")
 
 
 def test_orphan_sshd():

@@ -210,10 +210,18 @@ check("the far side's key is in the list",
 
 print()
 print("=== the far side runs the FROZEN BINARY as the dialer ===")
+# THE NEW HOST KEY IS ACCEPTED, BECAUSE THE REACHABLE END WAS
+# REINSTALLED, and its configuration -- and so its host key -- was
+# made again.
+#
+# WITHOUT IT the dialer stops with "THE REACHABLE END'S HOST KEY
+# CHANGED", which is the right thing for a person and the wrong
+# thing for a test that reinstalls the listen end on purpose.
 dialer = (
     f"env -i PATH=/usr/bin:/bin HOME=/home/liuxd {FAR_BIN} dialer "
     f"--listen-host {LISTEN_ADDR} --listen-port {LISTEN_PORT} "
     f"--forward-port {FWD_PORT} --user {WINDOWS_USER} "
+    f"--accept-new-host-key "
     f"> /tmp/ljt_dialer.log 2>&1 &"
 )
 frun(c, dialer, timeout=120)
