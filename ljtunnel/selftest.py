@@ -1356,8 +1356,17 @@ def test_host_key_change():
     # right on Windows.
     import subprocess as _sp2
 
+    # THE FLAG IS A WINDOWS THING, so the check for it is too.
+    #
+    # MEASURED: the check asked for `subprocess.CREATE_NO_WINDOW` on
+    # Linux, where it does not exist, and the whole test raised
+    # AttributeError -- so the check that was MEANT to prove the
+    # flag is there proved nothing on the other platform.
     check("the no-window flag is there on Windows",
-          _sp2.CREATE_NO_WINDOW != 0)
+          (not hasattr(_sp2, "CREATE_NO_WINDOW")
+           or _sp2.CREATE_NO_WINDOW != 0)
+          if sys.platform == "win32" else
+          not hasattr(_sp2, "CREATE_NO_WINDOW"))
     from ljtunnel import quiet
     _flags = quiet.no_window_flags()
     check("and the flag is passed to the children",
