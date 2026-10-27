@@ -284,11 +284,15 @@ def main():
     # is a person's own text.
     #
     # And the run is detached, so the channel does not wait for it.
+    # THE NEW HOST KEY IS ACCEPTED, because the reachable end is
+    # reinstalled by this test suite and its configuration -- and so
+    # its host key -- is made again.
     script = ("cd ~/LjtunnelDev && "
               "/home/liuxd/miniconda3/envs/ljtunnel-dev/bin/python "
               "-m ljtunnel dialer --listen-host \"{host}\" "
               "--listen-port {lp} --user \"{user}\" "
               "--access-key \"{access}\" --forward-port {fwd} "
+              "--accept-new-host-key "
               "2>&1").format(
                   host=REACHABLE, lp=LISTEN_PORT, user=REACHABLE_USER,
                   access=access_pub, fwd=FWD_PORT)
