@@ -81,12 +81,20 @@ INSTALL_DIR = Path(os.environ.get(
     r"C:\Users\xnd_l\AppData\Local\Programs\ljtunnel"))
 
 # The far side.
+#
+# THE ADDRESS IS NOT IN THE TREE.  An address is a fact about a
+# machine and not about the software, and it is wrong the moment the
+# machine is on a different network.  So it comes from the
+# environment, and the default is EMPTY.
+#
+# MEASURED: the tree's own guard caught it -- "no internal address in
+# the tracked tree" -- which is what it is for.
 FAR = {
-    "LJT_SERVER": "192.168.117.41",
+    "LJT_SERVER": "",
     "LJT_PORT": "8888",
-    "LJT_USER": "liuxd",
+    "LJT_USER": "",
     "LJT_PASSWORD": "",
-    "LJT_REMOTE": "/home/liuxd/LjtunnelDev",
+    "LJT_REMOTE": "",
 }
 
 FAILED = []
@@ -246,7 +254,7 @@ def _installed_product_code() -> str:
           "Get-ChildItem 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
           "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | "
           "ForEach-Object { $p=Get-ItemProperty $_.PSPath; "
-          "if($p.DisplayName -like '*ljtunnel*'){ $_.PSChildName } }")
+          "if($p.DisplayName -match 'ljtunnel'){ $_.PSChildName } }")
     r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps],
                        capture_output=True, text=True, errors="replace",
                        timeout=300)
@@ -258,7 +266,7 @@ def _installed_version() -> str:
           "Get-ChildItem 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
           "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | "
           "ForEach-Object { $p=Get-ItemProperty $_.PSPath; "
-          "if($p.DisplayName -like '*ljtunnel*'){ $p.DisplayVersion } }")
+          "if($p.DisplayName -match 'ljtunnel'){ $p.DisplayVersion } }")
     r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps],
                        capture_output=True, text=True, errors="replace",
                        timeout=300)
@@ -275,15 +283,25 @@ def the_far_side(version: str) -> bool:
 
     env = dict(os.environ)
     env.update(FAR)
+    remote = FAR["LJT_REMOTE"]
+    # THE PATHS ON THE FAR SIDE COME FROM THE ENVIRONMENT TOO, and
+    # the defaults are what they are on the machine this was written
+    # for -- a fact about that machine, not about the software.
+    conda_sh = os.environ.get("LJT_CONDA_SH",
+                              "/home/liuxd/miniconda3/etc/profile.d/conda.sh")
+    conda_env = os.environ.get("LJT_CONDA_ENV", "ljtunnel-dev")
+    site = os.environ.get(
+        "LJT_SITE_PACKAGES",
+        f"/home/liuxd/miniconda3/envs/{conda_env}/lib/python*/site-packages")
+
     cmd = [
         str(PARAMIKO_PY), "-u", str(ROOT / "tools" / "sync_to_far.py"),
-        "source /home/liuxd/miniconda3/etc/profile.d/conda.sh && "
-        "conda activate ljtunnel-dev && cd /home/liuxd/LjtunnelDev && "
+        f"source {conda_sh} && "
+        f"conda activate {conda_env} && cd {remote} && "
         "git fetch origin --tags --force 2>&1 | tail -1 && "
         "git reset --hard origin/master 2>&1 | tail -1 && "
         "git log --oneline -1 && git describe --tags && "
-        "rm -rf /home/liuxd/miniconda3/envs/ljtunnel-dev/lib/python*/site-packages/"
-        "ljtunnel*.dist-info ljtunnel.egg-info && "
+        f"rm -rf {site}/ljtunnel*.dist-info {remote}/ljtunnel.egg-info && "
         "pip install -e . --no-deps --no-build-isolation -q 2>&1 | tail -1; "
         "python -c 'import importlib.metadata as m; "
         "print(\"  the metadata:\", m.version(\"ljtunnel\"))' && "
@@ -297,8 +315,14 @@ def the_far_side(version: str) -> bool:
         if l.strip():
             say("  " + l.strip()[:110])
 
-    ok = step("the far side is at the commit",
+    ok = step("the far side has the release's version",
               "the metadata: " + version in out, out[-400:])
+    # ---- and it is at the SAME COMMIT ----
+    head_local = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                                 capture_output=True, text=True,
+                                 errors="replace", timeout=300).stdout.strip()
+    ok &= step("the far side is at the same commit",
+               head_local[:8] in out, f"the tree is at {head_local[:8]}")
     ok &= step("the far side's suite passes",
                "0 failed" in out, out[-400:])
     ok &= step("the Linux binary is built",
@@ -419,16 +443,21 @@ def main(argv=None) -> int:
             print("the install failed, so nothing was pushed")
             return 1
 
-    # ---- 7. the Linux side ----
-    if not args.no_far:
-        the_far_side(version)
-
-    # ---- 8. the push ----
+    # ---- 7. the push ----
+    #
+    # BEFORE THE FAR SIDE, because the far side FETCHES the commit
+    # that was just pushed -- so the push has to be there first.
     if not args.no_push:
         if not the_push(version):
             print()
             print("the push failed")
             return 1
+
+    # ---- 8. the Linux side ----
+    if not args.no_far:
+        if not the_far_side(version):
+            print()
+            print("the Linux side is not at this release")
 
     # ---- the summary ----
     print()
