@@ -234,7 +234,25 @@ def the_install(version: str) -> bool:
     # ---- the old one goes ----
     code, out = run(["msiexec.exe", "/x", _installed_product_code(), "/qn"])
     step("the old copy is uninstalled", code == 0, out[-200:])
-    time.sleep(10)
+    time.sleep(12)
+
+    # ---- AND THE INSTALL DIRECTORY GOES WITH IT ----
+    #
+    # THE COMPONENT STATE IS THE POINT.  Windows Installer keeps a
+    # record of what it installed, and if the files are still there it
+    # decides they do not need replacing -- so the new build is not
+    # installed and the old one stays, and the product looks like it
+    # was updated and was not.
+    #
+    # MEASURED: the install put a build from 18:07 on the machine when
+    # the build tree had one from 20:40, and the installed suite said
+    # "AttributeError: 'App' object has no attribute 'local_user_var'".
+    #
+    # The uninstall removes the files it installed, but not always
+    # all of them -- a file that was changed after the install is
+    # left alone, and so is a directory that is not empty.  So the
+    # directory is removed here, and the install starts from nothing.
+    _remove_install_dir()
 
     # ---- and the new one comes ----
     code, out = run(["msiexec.exe", "/i", str(msi), "/qn"], timeout=590)
@@ -260,6 +278,32 @@ def the_install(version: str) -> bool:
         ok &= step(name, code == 0, out[-400:])
         say(f"      {line[-1][:80] if line else ''}")
     return ok
+
+
+def _remove_install_dir() -> None:
+    """Take the install directory away, so the install starts clean.
+
+    Windows Installer keeps a record of what it installed.  If the
+    files are still there it decides they do not need replacing, and
+    the new build is not installed and the old one stays.
+
+    MEASURED: the install put a build from 18:07 on the machine when
+    the build tree had one from 20:40, and the installed suite failed
+    on an attribute the new code has and the old one does not.
+
+    So the directory goes, and the install starts from nothing.
+    """
+    if not INSTALL_DIR.is_dir():
+        return
+    # ---- and the processes that hold the files let go first ----
+    for name in ("ljtunnel.exe", "pythonw.exe"):
+        subprocess.run(["taskkill", "/F", "/IM", name],
+                       capture_output=True, text=True, errors="replace",
+                       timeout=120)
+    time.sleep(2)
+    shutil.rmtree(str(INSTALL_DIR), ignore_errors=True)
+    if INSTALL_DIR.exists():
+        say(f"      the install directory is still there: {INSTALL_DIR}")
 
 
 def _installed_product_code() -> str:
