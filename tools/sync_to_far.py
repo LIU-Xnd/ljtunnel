@@ -19,8 +19,10 @@ import sys
 
 import paramiko
 
-# Where the tree lives on the far side.
-REMOTE = os.environ.get("LJT_REMOTE", "/home/liuxd/LjtunnelDev")
+# Where the tree lives on the far side.  It is in the environment
+# too, because it is a fact about the machine and not about the
+# software.
+REMOTE = os.environ.get("LJT_REMOTE", "")
 
 # The directories that are not part of the source.
 SKIP = {"__pycache__", ".git", ".appdist-build", "appdist", "build",
@@ -48,10 +50,22 @@ def main(argv=None) -> int:
     if not local:
         local = str(__import__("pathlib").Path(__file__).resolve().parents[1])
 
-    host = os.environ.get("LJT_SERVER", "192.168.117.41")
-    port = int(os.environ.get("LJT_PORT", "8888"))
-    user = os.environ.get("LJT_USER", "liuxd")
+    # THE ADDRESS COMES FROM THE ENVIRONMENT, and there is no
+    # default for it: the address of a machine is not a fact about
+    # the software, and it is wrong the moment the machine is on a
+    # different network.
+    host = os.environ.get("LJT_SERVER", "")
+    port = int(os.environ.get("LJT_PORT", "22"))
+    user = os.environ.get("LJT_USER", "")
     password = os.environ.get("LJT_PASSWORD", "")
+
+    if not (host and user and password):
+        print("  LJT_SERVER, LJT_USER and LJT_PASSWORD are needed")
+        return 2
+
+    if not REMOTE:
+        print("  LJT_REMOTE is needed")
+        return 2
 
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
