@@ -26,7 +26,7 @@ manager = "requirements.txt"
 # printed to stdout goes nowhere.
 [[tool.pyappdist.launchers]]
 name = "ljtunnel"
-entry = "ljtunnel.__main__:main"
+entry = "ljtunnel.gui_entry:main"
 gui = true
 icon = { windows = "assets/ljtunnel.ico" }
 

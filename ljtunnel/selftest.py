@@ -1245,7 +1245,7 @@ def test_host_key_change():
     The dialer now checks the fingerprint BEFORE it tries a port, and
     says what happened.
     """
-    from ljtunnel import dialer, detect
+    from ljtunnel import cli, dialer, detect
 
     # ---- the refusal is named ----
     check("a changed host key is named in the refusal",
@@ -1388,6 +1388,72 @@ def test_host_key_change():
             offenders.append(_mod)
     check("and no product module starts a child directly",
           not offenders, ", ".join(offenders))
+
+    # ---- AND THE GUI LAUNCHER SAYS IT IS A GUI ONE ----
+    #
+    # pyappdist's GUI launcher runs the entry point with the CONSOLE
+    # python -- `python.exe -I -c ...` -- so the interpreter HAS a
+    # console, and the "is there a console" test says yes.
+    #
+    # But that console belongs to a GUI program: it is not on the
+    # screen, nobody is looking at it, and the usage text went into
+    # it and vanished.
+    #
+    # MEASURED: the launcher printed the usage and exited, and the
+    # window never came up.  The user said the shortcut "would not
+    # run".
+    #
+    # So the launcher says so ITSELF, and the dispatcher believes it.
+    import os as _os2
+
+    from ljtunnel import gui_entry
+
+    _saved = _os2.environ.get("LJT_GUI_LAUNCHER")
+    _os2.environ.pop("LJT_GUI_LAUNCHER", None)
+    try:
+        check("without the launcher's word it is not a GUI program",
+              not cli._started_as_gui())
+        _os2.environ["LJT_GUI_LAUNCHER"] = "1"
+        check("with the launcher's word it is a GUI program",
+              cli._started_as_gui())
+    finally:
+        if _saved is None:
+            _os2.environ.pop("LJT_GUI_LAUNCHER", None)
+        else:
+            _os2.environ["LJT_GUI_LAUNCHER"] = _saved
+
+    # AND THE ENTRY POINT REALLY SETS IT.  A guard that only checks
+    # that the function EXISTS proves nothing: the function can be
+    # there and do nothing at all.
+    #
+    # So the entry point is CALLED, and what it does to the
+    # environment is looked at.
+    _saved2 = _os2.environ.get("LJT_GUI_LAUNCHER")
+    _os2.environ.pop("LJT_GUI_LAUNCHER", None)
+    try:
+        # THE ENTRY POINT IS CALLED, with the dispatcher replaced so
+        # that the window does not open.  What matters is what it did
+        # to the environment.
+        import ljtunnel.cli as _cl
+
+        _saved_main = _cl.main
+        _cl.main = lambda argv=None: 0
+        try:
+            gui_entry.main([])
+        finally:
+            _cl.main = _saved_main
+        check("and the entry point really says so",
+              _os2.environ.get("LJT_GUI_LAUNCHER") == "1",
+              repr(_os2.environ.get("LJT_GUI_LAUNCHER")))
+    finally:
+        if _saved2 is None:
+            _os2.environ.pop("LJT_GUI_LAUNCHER", None)
+        else:
+            _os2.environ["LJT_GUI_LAUNCHER"] = _saved2
+    _root = pathlib.Path(__file__).resolve().parent.parent
+    check("and it is what the launcher points at",
+          "gui_entry" in (_root / "pyproject.toml").read_text(
+              encoding="utf-8", errors="replace"))
 
     # ---- and the option is there ----
     #

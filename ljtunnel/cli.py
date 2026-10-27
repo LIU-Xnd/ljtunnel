@@ -87,6 +87,27 @@ def _run_key(argv):
     return 0
 
 
+def _started_as_gui() -> bool:
+    """Was this program started as a GUI program?
+
+    **THE LAUNCHER SAYS SO.**  pyappdist's GUI launcher runs the
+    program with the CONSOLE python -- `python.exe -I -c ...` -- so
+    the interpreter has a console of its own, and the console test
+    says there is one.  But that console belongs to a GUI program:
+    it is not on the screen and nobody is looking at it.
+
+    MEASURED: the launcher printed the usage into that console and
+    exited, and the window never came up.  The user said the
+    shortcut "would not run".
+
+    So the launcher is named in the environment it hands over, and
+    the program reads it.
+    """
+    import os
+
+    return bool(os.environ.get("LJT_GUI_LAUNCHER"))
+
+
 def has_console() -> bool:
     """Is there a console to print to?
 
@@ -144,9 +165,25 @@ def main(argv=None) -> int:
     from . import __version__
 
     if not argv or argv[0] in ("-h", "--help", "help"):
-        # With no console there is nowhere to print to, so the user
-        # would see nothing happen. Open the window instead: that is
-        # what the Start Menu shortcut runs.
+        # A GUI LAUNCHER ALWAYS OPENS THE WINDOW.
+        #
+        # The console test was WRONG, and it cost the whole product:
+        # pyappdist's GUI launcher runs the script with the CONSOLE
+        # python -- `python.exe -I -c ...` -- so the interpreter HAS
+        # a console, and `GetConsoleProcessList` said so.  But that
+        # console belongs to the LAUNCHER, which is a GUI program:
+        # nobody is looking at it, and the usage text went into it
+        # and vanished.
+        #
+        # MEASURED: the launcher printed the usage and exited, and
+        # the window never came up.
+        #
+        # So the question is not "is there a console" but "was this
+        # program started as a GUI program".  The GUI launcher says
+        # so itself.
+        if not argv and _started_as_gui():
+            from .app import main as run
+            return run([])
         if not argv and not has_console():
             from .app import main as run
             return run([])
