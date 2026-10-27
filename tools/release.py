@@ -94,7 +94,10 @@ FAR = {
     "LJT_PORT": "8888",
     "LJT_USER": "",
     "LJT_PASSWORD": "",
-    "LJT_REMOTE": "",
+    # THE PATH ON THE FAR SIDE.  It is a path and not an address, so
+    # it may be written down -- and it is a default, and the
+    # environment still wins.
+    "LJT_REMOTE": "/home/liuxd/LjtunnelDev",
 }
 
 FAILED = []
@@ -204,10 +207,21 @@ def the_msi(version: str) -> bool:
         return False
     say(f"      {msi.name}  {msi.stat().st_size:,} bytes")
 
-    for tool, name in (("tools/msi_ui.py", "the installer's UI"),
-                       ("tools/msi_uninstall_check.py",
-                        "the uninstall's question")):
-        code, out = run([PY, tool, str(msi)])
+    # ---- the two checks on the built MSI ----
+    #
+    # THEY TAKE THEIR ARGUMENTS IN DIFFERENT WAYS, and getting it
+    # wrong looks like the MSI is broken:
+    #
+    #     msi_ui.py check <the msi>
+    #     msi_uninstall_check.py <the msi>
+    #
+    # MEASURED: the UI check said "invalid choice" and the release
+    # reported the installer's UI as broken.
+    for args, name in (((["tools/msi_ui.py", "check", str(msi)]),
+                         "the installer's UI"),
+                        ((["tools/msi_uninstall_check.py", str(msi)]),
+                         "the uninstall's question")):
+        code, out = run([PY] + args)
         step(name, code == 0, out[-400:])
     return True
 
@@ -281,9 +295,26 @@ def the_far_side(version: str) -> bool:
         FAILED.append("the Linux side")
         return False
 
+    # THE ENVIRONMENT WINS over the defaults, because the defaults
+    # are empty and the environment is where the address is.
+    #
+    # MEASURED: `env.update(FAR)` put the EMPTY default over the
+    # value that was in the environment, so the far side was skipped
+    # with "there is no LJT_PASSWORD".
     env = dict(os.environ)
-    env.update(FAR)
-    remote = FAR["LJT_REMOTE"]
+    for k, v in FAR.items():
+        if not v:
+            env[k] = os.environ.get(k, "")
+        else:
+            env[k] = v
+    missing = [k for k in ("LJT_SERVER", "LJT_USER", "LJT_PASSWORD",
+                           "LJT_REMOTE") if not env.get(k)]
+    if missing:
+        say("SKIP  these are not set, so the far side is not touched: "
+            + ", ".join(missing))
+        FAILED.append("the Linux side")
+        return False
+    remote = env["LJT_REMOTE"]
     # THE PATHS ON THE FAR SIDE COME FROM THE ENVIRONMENT TOO, and
     # the defaults are what they are on the machine this was written
     # for -- a fact about that machine, not about the software.
