@@ -290,10 +290,6 @@ def _installed_version() -> str:
 def the_far_side(version: str) -> bool:
     """The Linux binary, and the tree on the far side."""
     head("the Linux side")
-    if not FAR["LJT_PASSWORD"]:
-        say("SKIP  there is no LJT_PASSWORD, so the far side is not touched")
-        FAILED.append("the Linux side")
-        return False
 
     # THE ENVIRONMENT WINS over the defaults, because the defaults
     # are empty and the environment is where the address is.
@@ -331,7 +327,7 @@ def the_far_side(version: str) -> bool:
         f"conda activate {conda_env} && cd {remote} && "
         "git fetch origin --tags --force 2>&1 | tail -1 && "
         "git reset --hard origin/master 2>&1 | tail -1 && "
-        "git log --oneline -1 && git describe --tags && "
+        "git log -1 --format=%H && git describe --tags && "
         f"rm -rf {site}/ljtunnel*.dist-info {remote}/ljtunnel.egg-info && "
         "pip install -e . --no-deps --no-build-isolation -q 2>&1 | tail -1; "
         "python -c 'import importlib.metadata as m; "
@@ -352,8 +348,13 @@ def the_far_side(version: str) -> bool:
     head_local = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
                                  capture_output=True, text=True,
                                  errors="replace", timeout=300).stdout.strip()
+    # THE SHORT SHA, because that is what git prints by default:
+    # MEASURED, the check said "the tree is at afb5675b" -- eight
+    # characters -- while the far side printed "afb5675", which is
+    # seven.  So the comparison was against a prefix that was never
+    # going to be there.
     ok &= step("the far side is at the same commit",
-               head_local[:8] in out, f"the tree is at {head_local[:8]}")
+               head_local[:7] in out, f"the tree is at {head_local[:7]}")
     ok &= step("the far side's suite passes",
                "0 failed" in out, out[-400:])
     ok &= step("the Linux binary is built",
