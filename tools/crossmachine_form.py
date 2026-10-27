@@ -41,8 +41,20 @@ import time
 import paramiko
 
 # ---- the reachable end: this machine ----
-LISTEN_PORT = 10000          # the listen end's own sshd
-FWD_PORT = 20000             # the port the dialer is forwarded to
+# THE PRODUCTION PORTS, AND THE REASON THEY ARE USED HERE.
+#
+# The OpenSSH rule that ships with Windows allows 22, 10000 and
+# 20000, and the `ljtunnel` rule allows 10001 and 10002-10021.  So
+# 10001 and 10002 are BOTH admitted -- and they are the ports the
+# product actually uses.
+#
+# AND THE OTHER CROSS-MACHINE TEST USES 10000 AND 20000, so this
+# one does not fight it for a port.  MEASURED: the two tests run
+# back to back, and the second one failed 15/17 and then 18/19 while
+# the tunnel worked -- the other test's session was still holding the
+# forwarded port.
+LISTEN_PORT = 10001          # the listen end's own sshd
+FWD_PORT = 10002             # the port the dialer is forwarded to
 DIALER_PORT = 10001          # the dialer's own sshd
 
 # The unreachable machine.  These are read from the environment, so
@@ -96,14 +108,30 @@ def main():
     sshd.stop()
     records.remove("thebox")
 
+    # THE OTHER CROSS-MACHINE TEST NAMES THE SAME FAR KEY, and the
+    # key list is SHARED, so the name that is in it may be the other
+    # test's.  A key is named by the list it is in, and the list
+    # has one name per key, so the name this test expects is put
+    # back before it looks.
+    #
+    # MEASURED: the two tests run back to back, the frozen one
+    # first, and this one then saw the frozen one's name and failed
+    # "with the name from its key" -- while the tunnel worked.
+
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     c.connect(HOST, port=SSH_PORT, username=USER, password=PASSWORD,
               timeout=30)
     sftp = c.open_sftp()
     print("=== the unreachable machine, cleaned ===")
+    # BOTH FORMS OF THE DIALER'S SSH.  The frozen binary's dialer
+    # runs `ssh -N -p ...` and this one runs `ssh -R ...`, and a
+    # pattern that matches only one of them leaves the other alive
+    # -- holding the forwarded port, so the NEXT test finds it taken
+    # and its own forward is squeezed off.
     print(run(c, "pkill -f ljtunnel_sshd_config 2>/dev/null; "
-                 "pkill -f 'ssh -R' 2>/dev/null; sleep 1; "
+                 "pkill -f 'ssh -R' 2>/dev/null; "
+                 "pkill -f 'ssh -N -p' 2>/dev/null; sleep 1; "
                  "ss -tlnp 2>/dev/null | grep -E ':%d' || echo '  the "
                  "port is free'" % DIALER_PORT, timeout=120))
 
@@ -125,9 +153,42 @@ def main():
     check("the window builds", True)
 
     if far_key != "NONE":
-        L.add_key(far_key, "thebox")
+        # THE NAME ON THE KEY IS PUT ON, WHATEVER WAS THERE.
+        #
+        # The other cross-machine test names the SAME far key, and the
+        # key list is SHARED, and a key that is already in the list
+        # KEEPS the name it has.  So the name this test expects is
+        # put on explicitly, and not left to the add.
+        #
+        # MEASURED: the two tests run back to back, the frozen one
+        # first, and this one then saw the frozen one's name and
+        # failed "with the name from its key" -- while the tunnel
+        # worked.  The add alone does not fix it: it leaves a key that
+        # is already in the list alone.
+        L.set_key_name(far_key, "thebox")
         print("  the far machine's key is in the listen end's list")
 
+    # THE PORT HAS TO BE FREE, AND WAITING FOR IT IS NOT ENOUGH.
+    #
+    # The other cross-machine test ends by telling its dialer to stop,
+    # and the session takes a MOMENT to go -- the forwarded socket is
+    # held until it does.  So a fixed sleep is a race, and the race
+    # shows up as "the forwarded port speaks ssh" failing while
+    # everything else works.
+    #
+    # MEASURED: the two tests run back to back and the second one
+    # failed 15/17 until this wait was here.
+    #
+    # So the port is POLLED until nothing holds it.
+    print("=== the far side's forwarded port is free ===")
+    for _try in range(60):
+        _busy = run(c, f"ss -tln 2>/dev/null | grep -c ':{FWD_PORT} ' || true")
+        _n = (_busy or "0").strip().splitlines()[-1].strip() if (_busy or "").strip() else "0"
+        if _n in ("0", ""):
+            break
+        time.sleep(0.5)
+    else:
+        print(f"  the far side still has {FWD_PORT} held")
     # the sshd on this end, on a port the firewall admits
     #
     # The Listener is BUILT with the ports, so the PermitListen list
@@ -135,8 +196,17 @@ def main():
     # after the fact would leave the PermitListen list pointing at
     # the old range, and the dialer would be refused with a port
     # forwarding error that says nothing about why.
+    # THE LISTENER GETS A RANGE, NOT ONE PORT.  The dialer asks for
+    # the first port and then WALKS UP, and it only stops when it
+    # finds one that is really its own -- so the listen end has to
+    # admit the whole range the dialer may ask for.
+    #
+    # MEASURED: with `count=1` the PermitListen list had ONE port in
+    # it, and the dialer's second and third attempts were refused
+    # with "the reachable end did not accept this end's key" -- which
+    # says nothing about the key, because the port was not admitted.
     a.listener = L.Listener(sshd_port=LISTEN_PORT, first_port=FWD_PORT,
-                            count=1)
+                            count=20)
     a._start()
     for _ in range(60):
         a.update()
@@ -368,7 +438,9 @@ def main():
     # the key go from this end.  A test that leaves a tunnel running
     # is a test that holds a port, and the next run finds it busy.
     print(run(c, "pkill -f ljtunnel_sshd_config 2>/dev/null; "
-                 "pkill -f 'ljtunnel dialer' 2>/dev/null; sleep 2; "
+                 "pkill -f 'ljtunnel dialer' 2>/dev/null; "
+                 "pkill -f 'ssh -R' 2>/dev/null; "
+                 "pkill -f 'ssh -N -p' 2>/dev/null; sleep 2; "
                  "echo '  the far sshd and the dialer are gone'",
                  timeout=120))
 

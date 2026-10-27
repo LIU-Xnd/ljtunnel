@@ -248,6 +248,70 @@ def add_key(pubkey: str, name: str = "") -> None:
     sshd.set_authorized_keys(lines)
 
 
+def set_key_name(pubkey: str, name: str) -> bool:
+    """Put a NAME on a key, whether or not it already has one.
+
+    `add_key` LEAVES A KEY THAT IS ALREADY IN THE LIST ALONE, and
+    that is right: the same key added twice is one key, and rewriting
+    it would lose the name that is on it.
+
+    But there is a case where the name has to CHANGE: the key list is
+    shared, and a key that was put in under one name is put in again
+    under another.  MEASURED: two cross-machine tests, one far key,
+    one shared list -- the second test asked for a different name and
+    the add did not give it, so the panel showed the FIRST test's
+    name.
+
+    So the name is set EXPLICITLY here, and it replaces the one that
+    is there.
+    """
+    path = paths.authorized_keys()
+    if not os.path.isfile(path):
+        return False
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [l.rstrip() for l in fh if l.strip()]
+
+    key = pubkey.strip()
+    if not key:
+        return False
+    body = key.split()[-2] if len(key.split()) >= 2 else key
+
+    out = []
+    changed = False
+    for line in lines:
+        # THE KEY TYPE IS PART OF THE KEY.  A public key is three
+        # tokens -- the type, the body and the comment -- and the
+        # type is what tells sshd what it is.  So the body alone is
+        # not the key.
+        #
+        # MEASURED: the last TWO tokens were taken, which is the
+        # body and the comment, so the type was left off and the
+        # sshd said:
+        #
+        #     authorized_keys:1: check options: 'environment="..."         #         AAAAC3NzaC1lZDI1NTE5AAAAIO0IIvO7qC0GcJ+KOCyQ0VcG...
+        #
+        # and then refused the key as "Failed publickey" -- while
+        # the panel said the key was in the list, because it WAS.
+        parts = line.split()
+        line_body = " ".join(parts[-3:]) if len(parts) >= 3 else line
+        if body and body in line_body:
+            # the options come off, the new name goes on, and the key
+            # text stays
+            changed = True
+            out.append(f'environment="{detect.Registry.NAME_VAR}={name}" '
+                       + line_body)
+        else:
+            out.append(line)
+
+    if not changed:
+        # not in the list yet, so it is added
+        out.append(f'environment="{detect.Registry.NAME_VAR}={name}" ' + key)
+        changed = True
+
+    sshd.set_authorized_keys(out)
+    return changed
+
+
 def remove_key(fingerprint: str) -> bool:
     """Take a key out of the list, by its FINGERPRINT.
 
@@ -268,10 +332,10 @@ def remove_key(fingerprint: str) -> bool:
     out = []
     removed = False
     for line in lines:
-        # the key text is the last two tokens, whatever options come
-        # before it
+        # the key text is the last THREE tokens -- the type, the body
+        # and the comment -- because the type is part of it
         parts = line.split()
-        body = " ".join(parts[-2:]) if len(parts) >= 2 else line
+        body = " ".join(parts[-3:]) if len(parts) >= 3 else line
         if detect._fingerprint_of(body) == fingerprint:
             removed = True
             continue

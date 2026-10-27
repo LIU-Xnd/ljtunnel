@@ -1306,6 +1306,44 @@ def test_host_key_change():
         finally:
             paths.state_dir = old_dir
 
+    # ---- AND THE NAME ON A KEY CAN BE CHANGED ----
+    #
+    # `add_key` LEAVES A KEY THAT IS ALREADY IN THE LIST ALONE, and
+    # that is right -- but a key in a SHARED list can be put in again
+    # under a different name, and then the name has to change.
+    import tempfile as _tf2
+
+    with _tf2.TemporaryDirectory() as tmp2:
+        old_dir2 = paths.state_dir
+        paths.state_dir = lambda: tmp2
+        try:
+            listen.add_key(key, "thefirstname")
+            listen.set_key_name(key, "thesecondname")
+            names = [l for l in listen.read_keys() if key.split()[-2] in l]
+            check("the name on a key can be changed",
+                  len(names) == 1 and "thesecondname" in names[0],
+                  str(names)[:120])
+            # AND THE KEY TYPE IS STILL ON IT.  A public key is
+            # three tokens -- the type, the body and the comment --
+            # and the type is what tells sshd what it is.  Leaving
+            # the type off makes the sshd refuse the key while the
+            # panel says it is in the list, because it IS.
+            #
+            # MEASURED: the last TWO tokens were taken, so the line
+            # was "environment=... AAAAC3Nza... liuxd@zlabm" and the
+            # sshd said "Failed publickey".
+            # THE TYPE IS NOT THE FIRST TOKEN: the options come
+            # first, and the type is the token BEFORE the body.
+            check("and the key type is still on it",
+                  any(any(tok.startswith("ssh-") for tok in l.split())
+                      for l in names if l.split()),
+                  str(names)[:120])
+            check("and the old name is gone",
+                  not any("thefirstname" in l for l in listen.read_keys()),
+                  str(listen.read_keys())[:120])
+        finally:
+            paths.state_dir = old_dir2
+
     # ---- and the option is there ----
     #
     # IT IS AN EXPLICIT ACT.  The host key is the one thing in this
