@@ -1225,6 +1225,27 @@ def test_listener_handle():
           live.srv is None, str(live.srv))
 
 
+def _is_source_tree() -> bool:
+    r"""Whether this is the SOURCE tree, or the INSTALLED program.
+
+    The guards that read the source are about the source: they read
+    `app.py` to see what it does, and `tools/crossmachine_form.py` to
+    see what the test does.  The INSTALLED program has neither -- it
+    is a program, not a tree -- and a guard that reads a file that is
+    not there fails with a FileNotFoundError and looks like a bug in
+    the product.
+
+    MEASURED: the installed suite said
+
+        FileNotFoundError: ...\site-packages\pyproject.toml
+
+    So the source guards are SKIPPED in the installed program, and
+    they say that they were skipped.
+    """
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "pyproject.toml").is_file()
+
+
 def test_host_key_change():
     """A changed host key is SAID, not left as a row of @ signs.
 
@@ -1450,10 +1471,27 @@ def test_host_key_change():
             _os2.environ.pop("LJT_GUI_LAUNCHER", None)
         else:
             _os2.environ["LJT_GUI_LAUNCHER"] = _saved2
+    # AND THE PYPROJECT SAYS SO -- WHEN THERE IS A PYPROJECT.
+    #
+    # The INSTALLED copy has no pyproject.toml: it is not a source
+    # tree, it is a program.  So the check is about the source tree
+    # and it is SKIPPED when there is no pyproject.
+    #
+    # MEASURED: the installed suite said
+    #
+    #     FileNotFoundError: ...\site-packages\pyproject.toml
+    #
+    # and the release stopped, because the installed suite is part of
+    # the release.
     _root = pathlib.Path(__file__).resolve().parent.parent
-    check("and it is what the launcher points at",
-          "gui_entry" in (_root / "pyproject.toml").read_text(
-              encoding="utf-8", errors="replace"))
+    _pyproject = _root / "pyproject.toml"
+    if _pyproject.is_file():
+        check("and it is what the launcher points at",
+              "gui_entry" in _pyproject.read_text(
+                  encoding="utf-8", errors="replace"))
+    else:
+        check("and it is what the launcher points at (no pyproject here)",
+              True)
 
     # ---- AND THE PANEL DOES NOT ASK THE OS ON THE MAIN THREAD ----
     #
@@ -1472,6 +1510,11 @@ def test_host_key_change():
     import time as _time2
 
     _root3 = pathlib.Path(__file__).resolve().parent.parent
+    if not _is_source_tree():
+        # the guards below read the source, and there is no source
+        check("the source guards are skipped in the installed program",
+              True)
+        return
     _detect = (_root3 / "ljtunnel" / "detect.py").read_text(
         encoding="utf-8", errors="replace")
     # THE CODE, NOT THE WORDS: the docstring may say what it used
