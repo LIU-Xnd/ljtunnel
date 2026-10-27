@@ -125,6 +125,37 @@ if os.path.isdir(_REAL_STATE):
         except OSError:
             pass
 
+# ---- AND THE PRIVATE KEYS ARE MADE PRIVATE AGAIN ----
+#
+# THE COPY IS IN THE TEMP DIRECTORY, AND THE TEMP DIRECTORY IS OPEN.
+# OpenSSH checks the permissions on a private key and REFUSES one
+# that other people can read:
+#
+#     Permissions for '...ljtunnel_host_ed25519' are too open.
+#     It is required that your private key files are NOT accessible by
+#     others.
+#     sshd: no hostkeys available -- exiting.
+#
+# So the copy of each private key gets the same ACL as the original:
+# the owner and nobody else.
+if sys.platform == "win32":
+    import subprocess as _sp2
+    for _name in ("id_rsa_ljtunnel", "id_rsa_ljtunnel_access",
+                  "ljtunnel_host_ed25519"):
+        _key = os.path.join(_COPY_STATE, _name)
+        if not os.path.isfile(_key):
+            continue
+        # THE SAME THREE WHO HAVE THE ORIGINAL: the owner, the
+        # administrators, and the system.  OpenSSH accepts that --
+        # it is the layout the real key has -- and it rejects anything
+        # wider.
+        _sp2.run(["icacls", _key, "/inheritance:r", "/grant:r",
+                  f"{os.environ.get('USERNAME', '')}:(M)",
+                  "*S-1-5-32-544:(F)",     # the administrators
+                  "*S-1-5-18:(F)"],        # the system
+                 capture_output=True, text=True, errors="replace",
+                 timeout=120)
+
 _paths.state_dir = lambda: _COPY_STATE
 
 
