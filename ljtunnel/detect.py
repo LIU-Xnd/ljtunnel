@@ -59,6 +59,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from . import quiet
 import sys
 import time
 from dataclasses import dataclass, field
@@ -345,7 +346,7 @@ def host_key_fingerprint(port: int, host: str = "127.0.0.1",
     if not scan or not gen:
         return ""
     try:
-        r = subprocess.run([scan, "-T", "10", "-p", str(port), host],
+        r = quiet.run_hidden([scan, "-T", "10", "-p", str(port), host],
                            capture_output=True, text=True,
                            errors="replace", timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
@@ -355,7 +356,7 @@ def host_key_fingerprint(port: int, host: str = "127.0.0.1",
     if not keys:
         return ""
     try:
-        r2 = subprocess.run([gen, "-lf", "-"], input=keys[0],
+        r2 = quiet.run_hidden([gen, "-lf", "-"], input=keys[0],
                             capture_output=True, text=True,
                             errors="replace", timeout=20)
     except (OSError, subprocess.TimeoutExpired):
@@ -432,7 +433,7 @@ def _listening_windows(first: int, last: int) -> dict:
         "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
         f"Where-Object {{ $_.LocalPort -ge {first} -and $_.LocalPort -le {last} }} | "
         "ForEach-Object { '{0} {1}' -f $_.LocalPort, $_.OwningProcess }")
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script],
+    r = quiet.run_hidden(["powershell.exe", "-NoProfile", "-Command", script],
                        capture_output=True, text=True, errors="replace",
                        timeout=60)
     out = {}

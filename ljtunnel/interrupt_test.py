@@ -61,8 +61,27 @@ def check(name, ok, detail=""):
     return ok
 
 
-def listening(port):
-    """How many things are listening on this port."""
+def listening(port, wait=0):
+    """How many things are listening on this port.
+
+    AND IT WAITS FOR IT TO GO, WHEN IT IS ASKED TO.  The sshd is
+    told to stop and it takes a moment to actually go: MEASURED, the
+    port was still held three seconds after the process said it had
+    exited.  So a fixed sleep before the check is a race, and the
+    race is lost now and then.
+
+    So the wait is here, and it is the PORT that is waited for.
+    """
+    deadline = time.time() + (wait or 0)
+    n = _listening_now(port)
+    while n and time.time() < deadline:
+        time.sleep(0.5)
+        n = _listening_now(port)
+    return n
+
+
+def _listening_now(port):
+    """How many things are listening on this port, right now."""
     r = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command",
          f"(Get-NetTCPConnection -State Listen -LocalPort {port} "
@@ -249,9 +268,9 @@ def run() -> int:
         proc2.kill()
         proc2.wait(timeout=10)
 
-    time.sleep(2)
     check("the console version released the port",
-          listening(LISTEN_PORT) == 0, str(listening(LISTEN_PORT)))
+          listening(LISTEN_PORT, wait=20) == 0,
+          str(listening(LISTEN_PORT)))
     _no_sessions_left("the console version")
 
     # ===================================================== the window
@@ -276,7 +295,8 @@ def run() -> int:
         proc.wait(timeout=10)
 
     time.sleep(2)
-    check("the window released the port", listening(LISTEN_PORT) == 0,
+    check("the window released the port",
+          listening(LISTEN_PORT, wait=20) == 0,
           str(listening(LISTEN_PORT)))
     # and the FORWARDED ports too: on Windows a per-connection
     # session holds those, and the listener going away does not take

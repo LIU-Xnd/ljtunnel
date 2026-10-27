@@ -36,6 +36,7 @@ import sys
 import time
 
 from . import paths
+from . import quiet
 
 # The lines that are the same on both ends. The listen end adds
 # GatewayPorts; see the template below.
@@ -289,7 +290,7 @@ def ensure_host_key() -> str:
     if os.path.isfile(key):
         return key
     paths.ensure_dir(paths.state_dir())
-    r = subprocess.run(
+    r = quiet.run_hidden(
         [ssh_keygen_path(), "-q", "-t", "ed25519", "-f", key, "-N", ""],
         capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
@@ -307,7 +308,7 @@ def ensure_client_key() -> str:
     if os.path.isfile(key):
         return key
     paths.ensure_dir(paths.state_dir())
-    r = subprocess.run(
+    r = quiet.run_hidden(
         [ssh_keygen_path(), "-q", "-t", "ed25519", "-f", key, "-N", ""],
         capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
@@ -330,7 +331,7 @@ def ensure_access_key() -> str:
     if os.path.isfile(key):
         return key
     paths.ensure_dir(paths.state_dir())
-    r = subprocess.run(
+    r = quiet.run_hidden(
         [ssh_keygen_path(), "-q", "-t", "ed25519", "-f", key, "-N", ""],
         capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
@@ -400,7 +401,7 @@ def start(port: int, listen: str = "0.0.0.0",
                        permit_listen, host_key, log_level)
 
     cmd = [sshd_path(), "-f", cfg, "-D", "-e"]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+    p = quiet.popen_hidden(cmd, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT,
                          text=True, errors="replace", bufsize=1)
 
@@ -493,7 +494,7 @@ def stop() -> bool:
         return _stop_orphans()
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+            quiet.run_hidden(["taskkill", "/F", "/PID", str(pid)],
                            capture_output=True)
         else:
             os.kill(pid, 15)
@@ -695,7 +696,7 @@ def _pid_alive(pid: int) -> bool:
     tasklist is used there.
     """
     if sys.platform == "win32":
-        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+        r = quiet.run_hidden(["tasklist", "/FI", f"PID eq {pid}"],
                            capture_output=True, text=True, errors="replace")
         return str(pid) in (r.stdout or "")
     try:

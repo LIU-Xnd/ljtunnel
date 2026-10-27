@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from . import quiet
 import sys
 import tempfile
 import time
@@ -221,7 +222,7 @@ def rule_exists() -> bool:
     """
     if sys.platform != "win32":
         return False
-    r = subprocess.run(
+    r = quiet.run_hidden(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
          f"(Get-NetFirewallRule -DisplayName '{RULE_NAME}' "
          "-ErrorAction SilentlyContinue | Measure-Object).Count"],
@@ -435,7 +436,7 @@ def add_rule() -> tuple:
     if is_admin():
         # Already elevated: there is no prompt to show, so the rule
         # is added directly.
-        r = subprocess.run(netsh_command().split(), capture_output=True,
+        r = quiet.run_hidden(netsh_command().split(), capture_output=True,
                            text=True, errors="replace")
         if r.returncode == 0:
             return True, f"the rule is in: {port_spec()}"
@@ -452,7 +453,7 @@ def remove_rule() -> tuple:
     if sys.platform != "win32":
         return True, "not Windows: no firewall rule to remove"
     if is_admin():
-        r = subprocess.run(
+        r = quiet.run_hidden(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
              f"Remove-NetFirewallRule -DisplayName '{RULE_NAME}' "
              f"-ErrorAction SilentlyContinue"],

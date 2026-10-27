@@ -128,16 +128,32 @@ def shell_execute_runas(program: str, arguments: str = "") -> int:
             ("hProcess", wintypes.HANDLE),
         ]
 
-    SW_SHOWNORMAL = 1
+    # THE WINDOW IS HIDDEN, AND NO CONSOLE IS ASKED FOR.
+    #
+    # `SW_SHOWNORMAL` shows the window, and an elevated process gets
+    # a console of its own -- so the app's own launcher put a
+    # PowerShell window on the screen, every time it started, and
+    # the app asks to be elevated ONCE at the start, so the window
+    # came back every time the app was opened.
+    #
+    # MEASURED: the user saw PowerShell and cmd windows coming and
+    # going, and the app was started by a console script that
+    # started it once.
+    #
+    # `SW_HIDE` says do not show it, and `CREATE_NO_WINDOW` in the
+    # flags says do not make a console for it at all.  The one that
+    # matters is the flag: the window is the console.
+    SW_HIDE = 0
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SEE_MASK_NOASYNC = 0x00000100
 
     info = SHELLEXECUTEINFOW()
     info.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
-    info.fMask = SEE_MASK_NOCLOSEPROCESS
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
     info.lpVerb = "runas"
     info.lpFile = program
     info.lpParameters = arguments or None
-    info.nShow = SW_SHOWNORMAL
+    info.nShow = SW_HIDE
 
     ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info))
     if not ok:

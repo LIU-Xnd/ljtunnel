@@ -1344,6 +1344,42 @@ def test_host_key_change():
         finally:
             paths.state_dir = old_dir2
 
+    # ---- AND THE SUBPROCESSES DO NOT OPEN A WINDOW ----
+    #
+    # THE PANEL ASKS POWERSHELL FOR THE SOCKET TABLE ONCE A SECOND,
+    # and the Windows launcher is built on pythonw.exe, which has no
+    # console.  A console program started with no console to join
+    # makes a NEW one, in a window, on the screen -- so the panel put
+    # a PowerShell window on the screen once a second.
+    #
+    # The flag that stops it is CREATE_NO_WINDOW, and it is only
+    # right on Windows.
+    import subprocess as _sp2
+
+    check("the no-window flag is there on Windows",
+          _sp2.CREATE_NO_WINDOW != 0)
+    from ljtunnel import quiet
+    _flags = quiet.no_window_flags()
+    check("and the flag is passed to the children",
+          _flags.get("creationflags") == _sp2.CREATE_NO_WINDOW
+          if sys.platform == "win32" else _flags == {},
+          str(_flags))
+
+    # AND THE PRODUCT'S OWN MODULES GO THROUGH IT.  A module that
+    # calls subprocess.run() directly is a module that opens a
+    # window, and the source says so.
+    import re as _re2
+    offenders = []
+    for _mod in ("detect.py", "firewall.py", "sshd.py", "dialer.py"):
+        _p = pathlib.Path(__file__).resolve().parent / _mod
+        if not _p.is_file():
+            continue
+        _src = _p.read_text(encoding="utf-8", errors="replace")
+        if _re2.search(r"\bsubprocess\.(run|Popen)\(", _src):
+            offenders.append(_mod)
+    check("and no product module starts a child directly",
+          not offenders, ", ".join(offenders))
+
     # ---- and the option is there ----
     #
     # IT IS AN EXPLICIT ACT.  The host key is the one thing in this

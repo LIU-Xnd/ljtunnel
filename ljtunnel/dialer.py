@@ -72,6 +72,7 @@ import sys
 import time
 
 from . import detect, listen, paths, sshd
+from . import quiet
 
 
 def log(msg: str = "") -> None:
@@ -261,7 +262,7 @@ def main(argv=None) -> int:
         cmd = _forward_command(args, key, port, user)
         log("")
         log(f"  asking for port {port} ...")
-        fwd = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+        fwd = quiet.popen_hidden(cmd, stdout=subprocess.DEVNULL,
                                stderr=subprocess.PIPE, text=True,
                                errors="replace")
         time.sleep(2.0)
@@ -374,7 +375,7 @@ def _known_host_key(host: str, port: int) -> str:
 
     # the file is in the hashed form, so ssh-keygen -F finds it
     try:
-        r = subprocess.run(["ssh-keygen", "-F", f"[{host}]:{port}",
+        r = quiet.run_hidden(["ssh-keygen", "-F", f"[{host}]:{port}",
                             "-f", kf],
                            capture_output=True, text=True,
                            errors="replace", timeout=30)
@@ -416,7 +417,7 @@ def _forget_known_host(host: str, port: int) -> bool:
     for args in (["-R", f"[{host}]:{port}", "-f", kf],
                  ["-R", host, "-f", kf]):
         try:
-            r = subprocess.run(["ssh-keygen"] + args, capture_output=True,
+            r = quiet.run_hidden(["ssh-keygen"] + args, capture_output=True,
                                text=True, errors="replace", timeout=60)
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -530,7 +531,7 @@ def _own_host_key_fingerprint() -> str:
     if not os.path.isfile(key + ".pub"):
         return ""
     try:
-        r = subprocess.run([sshd.ssh_keygen_path(), "-lf", key + ".pub"],
+        r = quiet.run_hidden([sshd.ssh_keygen_path(), "-lf", key + ".pub"],
                            capture_output=True, text=True,
                            errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):

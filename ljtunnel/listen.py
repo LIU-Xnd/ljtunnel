@@ -575,6 +575,20 @@ def main(argv=None) -> int:
     log(f"  the sshd is up (pid {srv.pid})")
     log("")
 
+    # THE BREAK IS CAUGHT, SO THE SSHD IS STOPPED PROPERLY.
+    #
+    # A console BREAK is not a Ctrl-C: Windows turns it into
+    # SIGBREAK, and Python's DEFAULT handler for SIGBREAK is to
+    # KILL THE PROCESS.  MEASURED: the process went with
+    # 0xC000013A (STATUS_CONTROL_C_EXIT), the `finally` never ran,
+    # and the sshd was left holding the port -- so the next launch
+    # found it busy for no reason anybody could see.
+    #
+    # So SIGBREAK is handled the same way as SIGINT: it raises
+    # KeyboardInterrupt, which the block below catches, and the
+    # `finally` runs.
+    _catch_the_break()
+
     try:
         _loop(listener)
     except KeyboardInterrupt:
@@ -588,6 +602,75 @@ def main(argv=None) -> int:
         listener.stop()
     log("  stopped")
     return 0
+
+
+def _read_a_line():
+    """Read one line from the keyboard, or "" when there is none.
+
+    `sys.stdin.readline()` BLOCKS INSIDE A WIN32 CALL on Windows, and
+    Python only runs its signal handlers BETWEEN BYTECODES.  So a
+    console BREAK arrives while the read is in progress and is not
+    acted on until the read finishes -- which is when a person
+    types something.
+
+    MEASURED: the break was delivered and the process stayed up
+    until a newline was typed.
+
+    So the read is done in a way that comes back: a thread reads the
+    line and the main thread waits for it with a timeout, and the
+    break is acted on as soon as it arrives.
+
+    AND THE THREAD IS A DAEMON, so it does not keep the process
+    alive when the window closes.
+    """
+    import queue
+    import threading
+
+    q = queue.Queue(maxsize=1)
+
+    def _reader():
+        try:
+            q.put(sys.stdin.readline())
+        except Exception:
+            q.put("")
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+
+    while True:
+        try:
+            return q.get(timeout=0.25)
+        except queue.Empty:
+            # nothing typed yet -- but a console event may have
+            # arrived, and Python raises it here, between the
+            # bytecodes, where it CAN be caught.
+            pass
+
+
+def _catch_the_break() -> None:
+    """Make a console BREAK raise KeyboardInterrupt.
+
+    A Ctrl-C is SIGINT and Python raises KeyboardInterrupt for it.
+    A console BREAK is SIGBREAK and Python's default handler for it
+    TERMINATES THE PROCESS -- so the `finally` that stops the sshd
+    never runs, and the sshd is left holding the port.
+
+    So SIGBREAK is given the same handler, and the process gets to
+    clean up on its way out.
+    """
+    import signal
+
+    if not hasattr(signal, "SIGBREAK"):
+        return
+
+    def _handler(signum, frame):
+        raise KeyboardInterrupt()
+
+    try:
+        signal.signal(signal.SIGBREAK, _handler)
+    except (OSError, ValueError):
+        # Not the main thread, or the platform will not allow it.
+        pass
 
 
 def _loop(listener: "Listener") -> None:
@@ -613,7 +696,7 @@ def _loop(listener: "Listener") -> None:
 
     while True:
         try:
-            line = sys.stdin.readline()
+            line = _read_a_line()
         except KeyboardInterrupt:
             raise
         if not line:
