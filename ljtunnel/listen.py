@@ -201,6 +201,33 @@ def access_public_key() -> str:
     return sshd.public_key_of(sshd.ensure_access_key())
 
 
+def name_of(pubkey: str) -> str:
+    """The name on a key, which is the key's COMMENT.
+
+    A public key is three things: the type, the body, and the
+    comment.  The comment is the part a person reads, and it is where
+    the name goes.
+
+    MEASURED: the dialer makes its key with `ssh-keygen -C <name>`,
+    so the name is on the key itself, and the panel can show it
+    without anybody typing it in.
+
+    So the name is READ, not ASKED FOR.  That is what removes the
+    form: the only thing a person has to give is the key, and the
+    key says who it is.
+    """
+    parts = (pubkey or "").strip().split()
+    if len(parts) >= 3 and parts[0].startswith(("ssh-", "ecdsa-", "sk-")):
+        # THE COMMENT IS THE THIRD THING.  A public key is the type,
+        # the body and the comment -- three of them -- so the comment
+        # starts at the third.
+        #
+        # MEASURED: the key has three parts and the name was empty,
+        # because the comment was read from the fourth.
+        return " ".join(parts[2:]).strip()
+    return ""
+
+
 def add_key(pubkey: str, name: str = "") -> None:
     """Let a key log in to this end's sshd.
 
@@ -228,6 +255,10 @@ def add_key(pubkey: str, name: str = "") -> None:
     key = pubkey.strip()
     if not key:
         return
+    # THE NAME IS ON THE KEY, so it is read from there when the
+    # caller does not say what it is.
+    if not name:
+        name = name_of(key)
     body = key.split()[-2] if len(key.split()) >= 2 else key
     for i, line in enumerate(lines):
         if body and body in line:

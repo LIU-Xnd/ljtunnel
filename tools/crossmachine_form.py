@@ -353,20 +353,21 @@ def main():
     else:
         print("    (there is no file!)")
 
-    # ---- the form, filled in ----
+    # ---- the form: ONE FIELD, THE KEY ----
+    #
+    # THE NAME IS ON THE KEY.  The comment is the name, and the panel
+    # reads it -- which is what lets the form be one field.
     fake_key = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"
                 "dGUzdC1rZXktZm9yLXRoZS13aW5kb3ctdGVzdA"
-                " do-not-use-this-key")
-    a.name_var.set("thebox")
-    a.host_var.set(REACHABLE)
-    a.user_var.set(REACHABLE_USER)
+                " thebox")
     a.key_var.set(fake_key)
-    a.note_var.set("the far machine")
     a._save()
     a.update_idletasks()
 
     rec = records.by_name("thebox")
     check("the record is kept", bool(rec), str(records.load())[:100])
+    check("and it is named after the key's comment",
+          bool(rec) and rec.get("name") == "thebox", str(rec)[:100])
     check("the key is in the listen end's key list",
           any("thebox" in l for l in L.read_keys()),
           str(L.read_keys())[:120])
@@ -377,23 +378,19 @@ def main():
     check("the record is in the panel", bool(target),
           str([a.tree.item(i, "values")[0]
                for i in a.tree.get_children()]))
-    if target:
-        a.tree.selection_set(target)
-        a._copy_selected()
-        a.update_idletasks()
-        cmd = a.clipboard_get()
-        check("the command is on the clipboard",
-              cmd.startswith("ljtunnel dialer"), cmd[:90])
-        check("the command names the reachable end",
-              REACHABLE in cmd, cmd[:120])
-        check("the command carries the access key",
-              "ssh-ed25519" in cmd, cmd[:120])
-        check("the command names the reachable end's user",
-              f"--user {REACHABLE_USER}" in cmd, cmd[:120])
-        check("the command names no port of its own",
-              "--forward-port" not in cmd, "the dialer finds the port")
-    else:
-        cmd = ""
+    a._show_command()
+    a.update_idletasks()
+    cmd = a.clipboard_get()
+    check("the command is on the clipboard",
+          cmd.startswith("ljtunnel dialer"), cmd[:90])
+    check("the command names the reachable end",
+          REACHABLE in cmd, cmd[:120])
+    check("the command carries the access key",
+          "ssh-ed25519" in cmd, cmd[:120])
+    check("the command names the reachable end's user",
+          f"--user {REACHABLE_USER}" in cmd, cmd[:120])
+    check("the command names no port of its own",
+          "--forward-port" not in cmd, "the dialer finds the port")
 
     # ---- the command, rewritten for the ports the firewall admits ----
     #

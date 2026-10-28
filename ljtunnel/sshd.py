@@ -317,15 +317,30 @@ def ensure_host_key() -> str:
     return key
 
 
-def ensure_client_key() -> str:
-    """Make the key this end uses to log in to the other end."""
+def ensure_client_key(comment: str = "") -> str:
+    """Make the key this end uses to log in to the other end.
+
+    THE COMMENT IS THE NAME.  A public key is three things -- the
+    type, the body and the comment -- and the comment is the part a
+    person reads.  So the comment carries this end's name and the
+    other end's panel shows it without anybody typing it in.
+
+    MEASURED: the other end finds the name by reading the key list,
+    and the key list is what it has.  So the name has to be ON THE
+    KEY, and the key's comment is where it goes.
+
+    The comment is only set when the key is MADE.  An existing key
+    keeps the comment it has -- a key that is regenerated would get a
+    new identity, and the other end's list would hold the old one.
+    """
     key = paths.client_key()
     if os.path.isfile(key):
         return key
     paths.ensure_dir(paths.state_dir())
-    r = quiet.run_hidden(
-        [ssh_keygen_path(), "-q", "-t", "ed25519", "-f", key, "-N", ""],
-        capture_output=True, text=True, errors="replace")
+    cmd = [ssh_keygen_path(), "-q", "-t", "ed25519", "-f", key, "-N", ""]
+    if comment:
+        cmd += ["-C", comment]
+    r = quiet.run_hidden(cmd, capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
         raise SystemExit(f"ssh-keygen failed: {(r.stdout + r.stderr).strip()}")
     try:

@@ -98,6 +98,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="this end's own sshd port (default: 10001)")
     p.add_argument("--user", default=None, metavar="NAME",
                    help="the user on the reachable end (default: this one)")
+    p.add_argument("--name", default=None, metavar="NAME",
+                   help="what this dialer is called on the reachable end")
     p.add_argument("--local-user", default=None, metavar="NAME",
                    help="the account on THIS machine that a person logs in as "
                         "through the forwarded port")
@@ -140,6 +142,22 @@ def main(argv=None) -> int:
 
     paths.ensure_dir(paths.state_dir())
 
+    # THIS END'S OWN ACCOUNT.
+    #
+    # THE DIALER KNOWS IT, and it does not have to be asked: it is the
+    # account the command is run as.  So the dialer tells its sshd
+    # who may log in through the forwarded port, and a person who
+    # connects gets told the same name in the log.
+    #
+    # MEASURED: the person got
+    # "Permission denied (publickey,keyboard-interactive)" with a
+    # perfectly good key, because the name was the REACHABLE END's
+    # and not this end's.  So the name has to be THIS end's.
+    local_account = (args.local_user or "").strip() or current_user()
+    if not local_account:
+        log("cannot tell who the user is; pass --local-user")
+        return 2
+
     # The end user's key goes into this end's key list, so the person
     # can log in here. It is added, not replaced: the list may already
     # hold the user's own key, and taking that away would be rude.
@@ -147,7 +165,14 @@ def main(argv=None) -> int:
         add_key(args.access_key)
 
     # The machine key: this end's identity to the listen end.
-    key = sshd.ensure_client_key()
+    # THE NAME GOES ON THE KEY, so the reachable end's panel shows it
+    # without anybody typing it in there.
+    #
+    # MEASURED: the name is read from the key's comment, and the
+    # comment is the part of a public key that a person reads.  So it
+    # is the right place for it.
+    name = (args.name or "").strip()
+    key = sshd.ensure_client_key(name)
     pub = sshd.public_key_of(key)
     log("  this end's key for the reachable end:")
     log(f"    {pub}")
@@ -167,13 +192,8 @@ def main(argv=None) -> int:
     # MEASURED: "Permission denied (publickey,keyboard-interactive)"
     # with a key that was perfectly good, because the name was the
     # reachable end's and not this end's.
-    if args.local_user:
-        log(f"  a person connects through the forwarded port as: "
-            f"{args.local_user}")
-    else:
-        log("  a person connects through the forwarded port as this end's "
-            "own account")
-        log("    (--local-user says which one, if it is not the default)")
+    log(f"  a person connects through the forwarded port as: "
+        f"{local_account}")
     log("")
 
     if args.print_only:
@@ -192,7 +212,7 @@ def main(argv=None) -> int:
     # One key, two jobs, and it is still one key on disk.
     srv = sshd.start(args.local_port, listen="127.0.0.1",
                      gateway_ports=False, allow_forwarding=False,
-                     host_key=key, allowed_users=args.local_user or "")
+                     host_key=key, allowed_users=local_account)
     time.sleep(1.5)
     if srv.poll() is not None:
         log("  the sshd did not start.")

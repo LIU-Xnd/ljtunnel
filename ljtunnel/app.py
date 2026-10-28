@@ -148,85 +148,58 @@ class App(tk.Tk):
                   text="Until the rule is in, the dialers time out with no "
                        "message at all.").pack(anchor="w", pady=(6, 0))
 
-        # -- the dialers, and the form that records them -------------
+        # -- the dialer's public key ----------------------------------
         #
-        # The form is for RECORDING a dialer: its name, where it is,
-        # who logs in, and its key.  What it does NOT do is decide
-        # which port the dialer gets -- the dialer finds a free one
-        # itself -- and it does not decide whether the dialer is up.
-        # The panel works that out by itself.
-        add = ttk.LabelFrame(outer, text="Record a dialer", padding=8)
+        # THAT IS ALL THERE IS.  Everything else the form used to ask
+        # for is now READ from the key or worked out:
+        #
+        #   the name       the key's COMMENT, which the dialer writes
+        #   the address    the dialer's own address, from the sshd
+        #   the users      the machine's own accounts
+        #   the notes      nothing worth a field
+        #
+        # MEASURED: the name is read from the key's comment, and the
+        # comment is the part of a public key that a person reads.
+        # So the dialer makes its key with `ssh-keygen -C <name>` and
+        # the panel shows the name without anybody typing it in.
+        #
+        # AND THE KEY IS THE ONLY THING A PERSON HAS TO GIVE, because
+        # the dialer PRINTS it:
+        #
+        #     this end's key for the reachable end:
+        #         ssh-ed25519 AAAA... ljtunnel-box-a
+        #
+        # so it is one copy and one paste.
+        add = ttk.LabelFrame(outer, text="The dialer's public key", padding=8)
         add.pack(fill="x", pady=(pad, 0))
 
-        ttk.Label(add, text="name").grid(row=0, column=0, sticky="w")
-        self.name_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.name_var, width=14).grid(
-            row=0, column=1, sticky="w", padx=(4, 12))
-
-        ttk.Label(add, text="address").grid(row=0, column=2, sticky="w")
-        self.host_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.host_var, width=16).grid(
-            row=0, column=3, sticky="w", padx=(4, 12))
-
-        ttk.Label(add, text="user there").grid(row=0, column=4, sticky="w")
-        self.user_var = tk.StringVar(value="")
-        self.user_entry = ttk.Entry(add, textvariable=self.user_var, width=10)
-        self.user_entry.grid(row=0, column=5, sticky="w", padx=(4, 12))
-        ttk.Label(add, text="(the account on the REACHABLE end -- leave it "
-                            "empty for yours)").grid(
-            row=1, column=0, columnspan=6, sticky="w", pady=(2, 0))
-
-        # THE ACCOUNT ON THE DIALER.  It is a DIFFERENT account from
-        # the one above: the dialer logs in to the reachable end as
-        # "user there", and a PERSON logs in to the DIALER as this
-        # one, through the forwarded port.
-        #
-        # MEASURED: without it the person got
-        # "Permission denied (publickey,keyboard-interactive)" with a
-        # key that was perfectly good -- the name was the reachable
-        # end's and not the dialer's.
-        ttk.Label(add, text="user on the dialer").grid(
-            row=2, column=0, sticky="w", pady=(6, 0))
-        self.local_user_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.local_user_var, width=14).grid(
-            row=2, column=1, sticky="w", padx=(4, 12), pady=(6, 0))
-        ttk.Label(add, text="(the account a person logs in as on the "
-                            "DIALER -- leave it empty for its own)").grid(
-            row=2, column=2, columnspan=4, sticky="w", pady=(6, 0))
-
-        ttk.Label(add, text="dialer's public key").grid(
-            row=3, column=0, sticky="w", pady=(6, 0))
         self.key_var = tk.StringVar(value="")
         ttk.Entry(add, textvariable=self.key_var).grid(
-            row=3, column=1, columnspan=5, sticky="ew", padx=(4, 12),
-            pady=(6, 0))
+            row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(add, text="Add", command=self._save).grid(
+            row=0, column=1, sticky="e")
+        add.columnconfigure(0, weight=1)
 
-        ttk.Label(add, text="notes").grid(row=4, column=0, sticky="w",
-                                          pady=(6, 0))
-        self.note_var = tk.StringVar(value="")
-        ttk.Entry(add, textvariable=self.note_var).grid(
-            row=4, column=1, columnspan=5, sticky="ew", padx=(4, 12),
-            pady=(6, 0))
+        ttk.Label(add, text="The dialer prints its own key. The name on "
+                            "the key is the name it gets here.").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         buttons = ttk.Frame(add)
-        buttons.grid(row=5, column=0, columnspan=6, sticky="w", pady=(8, 0))
-        ttk.Button(buttons, text="Save", command=self._save).pack(side="left")
+        buttons.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Button(buttons, text="Show the command",
-                   command=self._show_command).pack(side="left", padx=6)
+                   command=self._show_command).pack(side="left")
         ttk.Button(buttons, text="Forget",
-                   command=self._forget).pack(side="left")
-        add.columnconfigure(1, weight=1)
-        add.columnconfigure(3, weight=1)
+                   command=self._forget).pack(side="left", padx=6)
 
         # -- the panel ----------------------------------------------
         mid = ttk.LabelFrame(outer, text="Dialers", padding=6)
         mid.pack(fill="both", expand=True, pady=(pad, 0))
 
-        cols = ("name", "port", "state", "where", "notes")
+        cols = ("name", "port", "state", "where")
         self.tree = ttk.Treeview(mid, columns=cols, show="headings",
                                   height=10)
-        for col, width in (("name", 130), ("port", 60),
-                           ("state", 90), ("where", 150), ("notes", 180)):
+        for col, width in (("name", 200), ("port", 70),
+                           ("state", 100), ("where", 170)):
             self.tree.heading(col, text=col)
             self.tree.column(col, width=width, anchor="w")
         sb = ttk.Scrollbar(mid, orient="vertical",
@@ -237,10 +210,8 @@ class App(tk.Tk):
 
         row = ttk.Frame(outer)
         row.pack(fill="x", pady=(pad, 0))
-        ttk.Button(row, text="Copy the command",
-                   command=self._copy_selected).pack(side="left")
         ttk.Button(row, text="Copy the access key path",
-                   command=self._copy_access_path).pack(side="left", padx=6)
+                   command=self._copy_access_path).pack(side="left")
         ttk.Button(row, text="Be an administrator",
                    command=self._ask_to_be_admin)
         ttk.Button(row, text="Open the firewall",
@@ -418,35 +389,38 @@ class App(tk.Tk):
     # ------------------------------------------------------------ dialers
 
     def _save(self):
-        """Record the dialer the form describes.
+        """Add the dialer whose key was pasted in.
 
-        The record says what this dialer IS: its name, where it is,
-        who logs in, and its key.  It does not say which port it gets
-        -- the dialer finds a free one -- and it does not say whether
-        it is up: the panel works that out by itself.
+        THE KEY IS THE WHOLE INPUT.  The name is ON the key -- it is
+        the key's comment -- and everything else is worked out or is
+        not worth asking for.
 
-        The key, if there is one, goes into this end's key list, so
-        the dialer is let in.  A record with no key is still a record:
-        it is a box that has not been set up yet, and the command
-        that sets it up is what the panel prints.
+        MEASURED: the name is read from the comment, and the comment
+        is the part of a public key that a person reads.  So the
+        dialer makes its key with `ssh-keygen -C <name>` and the panel
+        shows the name without anybody typing it in.
+
+        AND A KEY WITH NO COMMENT STILL WORKS: it is named after its
+        own fingerprint, which is enough to tell two dialers apart.
         """
-        name = self.name_var.get().strip()
-        host = self.host_var.get().strip()
-        user = self.user_var.get().strip()
         key = self.key_var.get().strip()
-        note = self.note_var.get().strip()
-
-        if not name and not host and not key:
+        if not key:
             messagebox.showerror(APP_TITLE,
-                                 "a record needs at least a name")
+                                 "paste the dialer's public key")
             return
 
-        rec = records.add(name or key[:24], key, host, user, note,
-                           local_user=self.local_user_var.get().strip())
-        if key:
-            L.add_key(key, rec["name"])
-            self._append(f"the key is in the list, named {rec['name']}")
-        self._append(f"recorded {rec['name']}")
+        name = L.name_of(key)
+        if not name:
+            name = detect._fingerprint_of(key)
+            self._append(f"the key has no name on it, so it is called "
+                         f"{name}")
+
+        # ---- the key goes into the list, so the dialer is let in ----
+        L.add_key(key, name)
+        rec = records.add(name, key)
+        self.key_var.set("")
+
+        self._append(f"the key is in the list, named {name}")
         self._append(f"  the command it runs:")
         self._append(f"    {records.command_for(rec)}")
         self._refresh()
@@ -474,50 +448,20 @@ class App(tk.Tk):
         self._refresh()
 
     def _show_command(self):
-        """Show the command the recorded dialer runs.
+        """Show the command a dialer runs.
 
-        The command is for the dialer to RUN, on the other machine.
-        It is shown in the log, and it is copied to the clipboard, so
-        it can be pasted into a terminal over there.
+        IT IS THE SAME COMMAND FOR EVERY DIALER, because the dialer
+        finds its own port and the reachable end is the same one.
+
+        It is shown in the log and copied to the clipboard, so it can
+        be pasted into a terminal over there.
         """
-        rec = self._form_record()
-        cmd = records.command_for(rec)
+        cmd = L.dialer_command()
         self.clipboard_clear()
         self.clipboard_append(cmd)
-        self._append(f"the command for {rec['name']}:")
+        self._append("the command for a dialer:")
         self._append(f"  {cmd}")
         self._append("  (copied -- paste it on the dialer machine)")
-
-    def _copy_selected(self):
-        """The command for the SELECTED row, copied.
-
-        The clipboard is the point: the command is run on another
-        machine, and the fastest way to get it there is to paste it.
-        """
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showerror(APP_TITLE, "pick a row first")
-            return
-        rec = self._records.get(sel[0])
-        if not rec:
-            return
-        cmd = records.command_for(rec)
-        self.clipboard_clear()
-        self.clipboard_append(cmd)
-        self._append(f"copied the command for {rec['name']}")
-        self._append(f"  {cmd}")
-
-    def _form_record(self) -> dict:
-        """The record the form describes, with the form's values."""
-        name = self.name_var.get().strip()
-        return {
-            "name": name or "a dialer",
-            "host": self.host_var.get().strip(),
-            "user": self.user_var.get().strip(),
-            "local_user": self.local_user_var.get().strip(),
-            "pubkey": self.key_var.get().strip(),
-            "note": self.note_var.get().strip(),
-        }
 
     def _refresh(self):
         """Redraw the panel: the records, and the dialers that are up.
@@ -546,16 +490,13 @@ class App(tk.Tk):
                 name,
                 str(d.port) if d else "",
                 "up" if d else "not up",
-                rec.get("host") or (d.peer if d else ""),
-                rec.get("note", ""),
+                d.peer if d else "",
             )
 
         # and then the live dialers with no record
         for key, d in live.items():
-            self._records[key] = {"name": key, "pubkey": "",
-                                   "host": d.peer, "user": "",
-                                   "local_user": "", "note": ""}
-            want[key] = (key, str(d.port), "up", d.peer, "")
+            self._records[key] = {"name": key, "pubkey": ""}
+            want[key] = (key, str(d.port), "up", d.peer)
 
         have = {iid: tuple(self.tree.item(iid, "values"))
                 for iid in self.tree.get_children()}

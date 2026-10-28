@@ -32,20 +32,19 @@ arrives to the dialer.
 On the reachable machine, open the window and press **Start**. It
 shows the address to use.
 
-**Record the dialer.** Fill in the form -- its name, where it is, who
-logs in to the reachable end, who logs in on the dialer itself, its
-public key, a note if there is anything worth writing down -- and
-press **Save**. The record is kept, the key goes into the listen
-end's key list so the dialer is let in, and the window prints the
-command that dialer runs.
+**Add the dialer.** Paste its **public key** into the one box and
+press **Add**. That is the whole input.
 
-**The two "who logs in" fields are different accounts on different
-machines.** `user there` is an account on the **reachable end** --
-that is who the dialer logs in as. `user on the dialer` is an account
-on the **dialer** -- that is who a person logs in as through the
-forwarded port. Leave either empty and the machine's own account is
-used. [There are two users, and they are on different
-machines](#there-are-two-users-and-they-are-on-different-machines).
+The name is not typed in. It is **on the key** -- the key's comment --
+and the window reads it from there, so the dialer names itself:
+
+```
+this end's key for the reachable end:
+    ssh-ed25519 AAAA... ljtunnel-box-a
+```
+
+The key goes into the listen end's key list, so the dialer is let in,
+and the window prints the command that dialer runs.
 
 **Show the command** puts that command on the clipboard, ready to be
 pasted into a terminal on the other machine. **Copy** does the same
@@ -60,13 +59,25 @@ On the unreachable machine, run the command the window gives you:
 ljtunnel dialer --listen-host <the reachable machine> \
                 --listen-port 10001 \
                 --user <your name on the reachable end> \
-                --local-user <your name on the dialer> \
                 --access-key "ssh-ed25519 ..."
 ```
 
 That command carries the access key, so it is one step: the dialer
 takes the key, puts it in its own key list, and the end user can log
 in.
+
+**It is the same command for every dialer.** The dialer finds its own
+port, and it knows its own account -- the one it is run as. So the
+command does not name an account on the dialer, and it cannot be
+wrong.
+
+To name it on the panel, give the dialer a name when it starts:
+
+```bash
+ljtunnel dialer --name box-a --listen-host ... 
+```
+
+and it puts that on its own key, and the window shows it.
 
 Then, from anywhere:
 
@@ -75,9 +86,12 @@ ssh -i <the access key> -p <the dialer's port> \
     <your name on the DIALER>@<the reachable machine>
 ```
 
-The name there is the dialer's, not the reachable end's. They are
-different accounts and only the dialer's exists where the forwarded
-port lands.
+The name there is the dialer's, not the reachable end's. The dialer
+says which one in its log:
+
+```
+  a person connects through the forwarded port as: liuxd
+```
 
 ## A RECORD and a DIALER
 

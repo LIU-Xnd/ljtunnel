@@ -56,9 +56,14 @@ _FP = "SHA256:RY1xRnF/3WiV8FKLVS6z16esXWAcCAPhjY30GHzqlzk"
 # the key list and take it out again.  It is not even a real key --
 # the base64 does not decode to a valid one, and it does not have
 # to: the test only puts it in a list and takes it out.
+#
+# THE COMMENT IS THE NAME.  The dialer makes its key with
+# `ssh-keygen -C <name>`, and the panel reads the name from there --
+# so a key that carries a comment is a key that names itself, and
+# that is what the window does with it.
 _FAKE_KEY = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"
              "dGUzdC1rZXktZm9yLXRoZS13aW5kb3ctdGVzdA"
-             " do-not-use-this-key")
+             " anotherbox")
 
 
 def check(name, ok, detail=""):
@@ -168,16 +173,28 @@ def run() -> int:
     # it is run is a test that measures the order things happened in.
     L.remove_key(detect._fingerprint_of(_FAKE_KEY))
     records.remove("anotherbox")
+    # ---- AND EVERYTHING A PREVIOUS RUN LEFT BEHIND ----
+    #
+    # A test that leaves a record behind makes the NEXT run fail on
+    # a row that is not there, and the failure looks like the product
+    # is wrong.  MEASURED: the panel started with a row called
+    # "do-not-use-this-key" and the test said the panel did not
+    # start empty -- and it was the test's own leftover.
+    for _old in records.load():
+        if _old.get("pubkey"):
+            L.remove_key(detect._fingerprint_of(_old["pubkey"]))
+        records.remove(_old.get("name"))
     before = len(L.read_keys())
 
-    a.name_var.set("anotherbox")
-    a.host_var.set("192.0.2.9")
-    a.user_var.set("someone")
-    # THE ACCOUNT ON THE DIALER, which is a DIFFERENT account from
-    # the one above.
-    a.local_user_var.set("dialer-account")
+    # ---- ONE INPUT: THE KEY ----
+    #
+    # THE NAME IS ON THE KEY.  The dialer makes its key with
+    # `ssh-keygen -C <name>`, so the comment carries the name and the
+    # panel reads it -- there is no box to type it in.
+    #
+    # MEASURED: that is what lets the form go down to one field, and
+    # a form with five boxes is a form nobody fills in.
     a.key_var.set(_FAKE_KEY)
-    a.note_var.set("the far box")
     a._save()
     a.update_idletasks()
 
@@ -186,28 +203,26 @@ def run() -> int:
     check("the name went on the key",
           any("anotherbox" in l for l in L.read_keys()),
           str(L.read_keys())[:120])
+    check("and the key field is cleared",
+          a.key_var.get() == "", a.key_var.get()[:40])
 
     # ---- the record is kept ----
     rec = records.by_name("anotherbox")
     check("the record is kept", bool(rec), str(records.load())[:120])
-    check("with the address", rec.get("host") == "192.0.2.9", str(rec))
-    check("with the user", rec.get("user") == "someone", str(rec))
-    check("with the note", rec.get("note") == "the far box", str(rec))
     check("with the key", rec.get("pubkey") == _FAKE_KEY, str(rec)[:80])
 
-    # ---- and the command it prints ----
-    cmd = records.command_for(rec)
+    # ---- and the command ----
+    #
+    # IT IS THE SAME COMMAND FOR EVERY DIALER: the dialer finds its
+    # own port and the reachable end is the same one.
+    cmd = L.dialer_command()
     check("the command names the dialer", "ljtunnel dialer" in cmd, cmd[:80])
-    check("the command names the address", "192.0.2.9" in cmd, cmd[:80])
-    check("the command names the user", "--user someone" in cmd, cmd[:80])
-    # THE ACCOUNT ON THE DIALER, which is not the same account as
-    # the one above.  MEASURED: without it the person got
-    # "Permission denied (publickey,keyboard-interactive)".
-    check("the command names the account on the dialer",
-          "--local-user dialer-account" in cmd, cmd[:120])
     check("the command carries the access key", "ssh-ed25519" in cmd, cmd[:80])
     check("the command does NOT name a port", "--forward-port" not in cmd,
           "the dialer finds the port itself")
+    check("and it does not name an account for the person",
+          "--local-user" not in cmd,
+          "the account belongs to the dialer, and the dialer knows it")
 
     # ---- and the panel shows the record ----
     a._refresh()
@@ -220,23 +235,18 @@ def run() -> int:
         if vals[0] == "anotherbox":
             check("the record's row says it is not up", vals[2] == "not up",
                   str(vals))
-            check("the record's row has the address",
-                  vals[3] == "192.0.2.9", str(vals))
-            check("the record's row has the note",
-                  vals[4] == "the far box", str(vals))
 
     # ---- the command is copied for the other machine ----
-    target = [i for i in a.tree.get_children()
-              if a.tree.item(i, "values")[0] == "anotherbox"]
-    a.tree.selection_set(target)
-    a._copy_selected()
+    a._show_command()
     a.update_idletasks()
     clip = a.clipboard_get()
     check("the command is on the clipboard", "ljtunnel dialer" in clip,
           clip[:80])
-    check("and it names the address", "192.0.2.9" in clip, clip[:80])
 
     # ---- and it can be forgotten ----
+    target = [i for i in a.tree.get_children()
+              if a.tree.item(i, "values")[0] == "anotherbox"]
+    a.tree.selection_set(target)
     a._forget()
     a.update_idletasks()
     check("the record is gone", not records.by_name("anotherbox"),

@@ -296,7 +296,12 @@ def test_dialer():
           "_port_is_ours" in src and "host_key_fingerprint" in src,
           "the client's own 'success' is not proof")
     check("the dialer's key is its own, not the user's",
-          "sshd.ensure_client_key()" in src)
+          "sshd.ensure_client_key(" in src)
+    # AND THE NAME GOES ON THE KEY, so the other end's panel can show
+    # it without anybody typing it in there.
+    check("and the dialer's key carries the name",
+          "ensure_client_key(name)" in src,
+          "the dialer does not put the name on its key")
     check("the dialer adds the access key to its own key list",
           "add_key(args.access_key)" in src)
 
@@ -652,27 +657,31 @@ def test_app():
         a = app.App()
         a.update_idletasks()
         check("the window builds", True)
-        eq("the window has the dialer list", len(a.tree["columns"]), 5)
+        eq("the window has the dialer list", len(a.tree["columns"]), 4)
         eq("with the columns it shows",
            tuple(a.tree["columns"]),
-           ("name", "port", "state", "where", "notes"))
+           ("name", "port", "state", "where"))
         check("the window shows the firewall command",
               FW.netsh_command() in a.fw_text.get("1.0", "end"))
 
-        # ---- the form ----
+        # ---- THE KEY FIELD, AND ONLY THE KEY FIELD ----
         #
-        # A form that is missing a field is a form that cannot
-        # record what it is supposed to record.  The five fields
-        # are: the name, the address, the user, the key, and the
-        # note.
-        for field in ("name_var", "host_var", "user_var", "key_var",
-                      "note_var"):
-            check(f"the form has a {field[:-4]}",
-                  hasattr(a, field), field)
+        # THERE IS ONE INPUT AND IT IS THE KEY.  Everything else the
+        # form used to ask for is read from the key or worked out:
+        # the name is the key's COMMENT, the address is the dialer's
+        # own, and the notes were never worth a field.
+        #
+        # MEASURED: a form with a field for every piece of the dialer
+        # is a form nobody fills in, and the one thing that has to be
+        # copied -- the key -- was one of five boxes.
+        check("the form has the key field", hasattr(a, "key_var"))
+        for field in ("name_var", "host_var", "user_var", "note_var",
+                      "local_user_var"):
+            check(f"and NOT a {field[:-4]} field",
+                  not hasattr(a, field), field)
 
         # ---- and the ways out ----
-        for method in ("_save", "_forget", "_show_command",
-                       "_copy_selected"):
+        for method in ("_save", "_forget", "_show_command"):
             check(f"the window has {method}",
                   callable(getattr(a, method, None)), method)
 
@@ -1575,11 +1584,28 @@ def test_host_key_change():
     #
     # MEASURED: "Permission denied (publickey,keyboard-interactive)"
     # with a good key, because the name was the reachable end's.
-    _rec = {"name": "x", "host": "", "user": "", "pubkey": "",
-            "local_user": "someone-else"}
+    # ---- AND THE COMMAND DOES NOT CARRY THE DIALER'S ACCOUNT ----
+    #
+    # THE DIALER KNOWS ITS OWN ACCOUNT, and it is the account the
+    # command is run as.  So the command does not name it -- and a
+    # name that was in the command would be the REACHABLE END's
+    # account, which is the mistake that cost an afternoon.
+    #
+    # MEASURED: the person got
+    # "Permission denied (publickey,keyboard-interactive)" with a good
+    # key, because the name was the reachable end's and not the
+    # dialer's.
+    _rec = {"name": "x", "host": "", "user": "", "pubkey": ""}
     _cmd = records.command_for(_rec)
-    check("and the command can say the local account",
-          "--local-user someone-else" in _cmd, _cmd[:120])
+    check("and the command does NOT name the dialer's account",
+          "--local-user" not in _cmd, _cmd[:120])
+
+    # ---- AND THE DIALER FILLS IT IN ITSELF ----
+    _dialer_src2 = (_root3 / "ljtunnel" / "dialer.py").read_text(
+        encoding="utf-8", errors="replace")
+    check("and the dialer works out its own account",
+          "allowed_users=local_account" in _dialer_src2,
+          "the dialer does not tell its sshd who may log in")
 
     # ---- AND THE SSHD CAN LIMIT THE ACCOUNTS IT ACCEPTS ----
     _cfg = sshd.write_config(10001, listen="127.0.0.1",
@@ -1587,6 +1613,32 @@ def test_host_key_change():
     _text = open(_cfg, encoding="utf-8").read()
     check("and the sshd can say who may log in",
           "AllowUsers someone" in _text, _cfg)
+
+    # ---- AND THE NAME IS READ FROM THE KEY ----
+    #
+    # THE NAME IS THE KEY'S COMMENT.  The dialer makes its key with
+    # `ssh-keygen -C <name>` and the panel shows the name without
+    # anybody typing it in -- which is what lets the form go down to
+    # one field.
+    #
+    # MEASURED: the key is three things -- the type, the body and the
+    # comment -- and the comment is the part a person reads.
+    _key = ("ssh-ed25519 "
+            "AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVa"
+            "r4KD9FAOqx ljtunnel-box-a")
+    check("the name is read from the key's comment",
+          L.name_of(_key) == "ljtunnel-box-a",
+          repr(L.name_of(_key)))
+    check("and a key with no comment has no name",
+          L.name_of("ssh-ed25519 AAAA") == "",
+          repr(L.name_of("ssh-ed25519 AAAA")))
+
+    # ---- AND THE DIALER PUTS THE NAME ON ITS KEY ----
+    _dialer_src = (_root3 / "ljtunnel" / "dialer.py").read_text(
+        encoding="utf-8", errors="replace")
+    check("and the dialer can be given a name",
+          "--name" in _dialer_src,
+          "the dialer cannot be given a name")
 
     # ---- AND THE START DOES NOT ASK FOR ADMINISTRATOR RIGHTS ----
     #
