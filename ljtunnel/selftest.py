@@ -1909,6 +1909,112 @@ def test_host_key_change():
         finally:
             _srv5.shutdown()
 
+    # ---- AND THE WRITING IS REFUSED ----
+    #
+    # **THE SERVER SERVES AND NOTHING ELSE.**  There is no upload, no
+    # delete and no directory making.  A file server that writes is a
+    # different program with a different set of rules about who may
+    # write what, and there is one that does that (`rclone serve
+    # webdav`), and this is not it.
+    #
+    # **AND A REFUSAL THAT DOES NOT READ THE BODY LEAVES IT ON THE
+    # CONNECTION**, and the next request on that connection reads the
+    # leftovers.  MEASURED: the server died with
+    #
+    #     ConnectionAbortedError: [WinError 10053]
+    #
+    # SO THE CHECK IS THE SAME CONNECTION TWICE -- a new one would not
+    # show it.
+    with _tf5.TemporaryDirectory() as _w12:
+        with open(os.path.join(_w12, "index.html"), "w", encoding="utf-8") as _fh12:
+            _fh12.write("IT_WORKS\n")
+        _srv12, _tok12 = _hs5.serve(_w12, 0)
+        _p12 = _srv12.server_address[1]
+        try:
+            for _meth in ("PUT", "POST", "DELETE", "MKCOL"):
+                _c12 = _hc5.HTTPConnection("127.0.0.1", _p12, timeout=10)
+                _c12.request(_meth, "/" + _tok12 + "/x.txt", body=b"X" * 64)
+                try:
+                    _r12 = _c12.getresponse()
+                    _r12.read()
+                    _st12 = _r12.status
+                except Exception as _e12:
+                    _st12 = f"{type(_e12).__name__}"
+                check(f"and a {_meth} is refused",
+                      _st12 == 405, str(_st12))
+
+                # AND THE SAME CONNECTION, AGAIN -- AND **ON A RAW
+                # SOCKET**, because `http.client` RECONNECTS by itself
+                # when the connection is closed, and a reconnected
+                # request would not show the dirt.
+                _b12 = b""
+                _st12b = "not tried"
+                try:
+                    import socket as _sk12
+                    _sk = _sk12.create_connection(("127.0.0.1", _p12), timeout=10)
+                    # THE REQUEST IS BUILT FROM BYTES, and the line
+                    # ends are REAL CRLFs -- MEASURED: a request whose
+                    # "\r\n" is two characters and a backslash makes
+                    # the server wait for a line that never comes.
+                    _crlf = b"\r\n"
+                    _sk.sendall(
+                        (f"{_meth} /{_tok12}/x.txt HTTP/1.1".encode()
+                         + _crlf + b"Host: 127.0.0.1" + _crlf
+                         + b"Content-Length: 64" + _crlf
+                         + b"Connection: keep-alive" + _crlf + _crlf)
+                        + b"X" * 64)
+                    # AND THE FIRST ANSWER IS READ WHOLE -- the
+                    # HEADERS AND THE BODY.  MEASURED: a recv() that
+                    # stops at the blank line leaves the body on the
+                    # socket, and the next recv() gets the LAST
+                    # ANSWER'S BODY instead of the next answer.
+                    _first = b""
+                    _sk.settimeout(5)
+                    while b"\r\n\r\n" not in _first:
+                        _chunk = _sk.recv(4096)
+                        if not _chunk:
+                            break
+                        _first += _chunk
+                    # AND THE BODY OF IT.
+                    if b"Content-Length:" in _first:
+                        try:
+                            _clen = int(_first.split(b"Content-Length:")[1]
+                                        .split(b"\r\n")[0].strip())
+                        except (IndexError, ValueError):
+                            _clen = 0
+                        if _clen > 0:
+                            _body = _first.split(b"\r\n\r\n", 1)[1]
+                            while len(_body) < _clen:
+                                _more = _sk.recv(4096)
+                                if not _more:
+                                    break
+                                _body += _more
+                    _sk.sendall(
+                        (f"GET /{_tok12}/index.html HTTP/1.1".encode()
+                         + _crlf + b"Host: 127.0.0.1" + _crlf
+                         + b"Connection: keep-alive" + _crlf + _crlf))
+                    _second = b""
+                    while b"IT_WORKS" not in _second:
+                        _chunk2 = _sk.recv(8192)
+                        if not _chunk2:
+                            break
+                        _second += _chunk2
+                    _sk.close()
+                    _st12b = _second.split(b" ")[1].decode() if b" " in _second else "?"
+                    _b12 = _second
+                except Exception as _e12b:
+                    _st12b = f"{type(_e12b).__name__}: {_e12b}"
+                check(f"and the connection is clean after a {_meth}",
+                      _st12b == "200" and b"IT_WORKS" in _b12,
+                      f"{_st12b} {_b12[:24]}")
+
+            # AND THE FILE WAS NOT PUT THERE.
+            check("and nothing was written",
+                  not os.path.exists(os.path.join(_w12, "x.txt")),
+                  os.path.join(_w12, "x.txt"))
+        finally:
+            _srv12.shutdown()
+
     # ---- AND THE HTTP SERVER SAYS WHO IT IS ----
     #
     # A PORT BEHIND AN HTTP SERVER HAS NO HOST KEY BEHIND IT, so the

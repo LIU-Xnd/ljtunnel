@@ -75,6 +75,19 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     # the token, and the directory
     token = ""
     root = ""
+
+    # **THE PROTOCOL IS 1.1, AND THAT IS NOT COSMETIC.**  MEASURED: with
+    # the default 1.0 the server closes the connection after every
+    # answer, so a client that keeps the connection open gets nothing
+    # -- and a refusal that leaves the request's body on the
+    # connection is then harmless, because there is no second request
+    # to read it.
+    #
+    # **AND WITH 1.1 THE CONNECTION IS KEPT, SO THE LEFTOVERS MATTER.**
+    # The body of a refused request is read and thrown away, so the
+    # next request on that connection is a request and not the last
+    # one's tail.
+    protocol_version = "HTTP/1.1"
     # who this server is, for the far end to read
     name = ""
     fingerprint = ""
@@ -109,6 +122,8 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         return hmac.compare_digest(first, self.token)
 
     def _refuse(self) -> None:
+        # THE BODY IS READ HERE TOO -- see _no_write.
+        self._drain_body()
         body = b"no token\n"
         self.send_response(404)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -168,6 +183,64 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return
         self.path = "/" + self._translate(self.path)
         super().do_HEAD()
+
+    # ---- AND THE METHODS THAT WOULD WRITE ARE SAID NO TO ----
+    #
+    # **THEY ARE HERE AND NOT LEFT TO THE DEFAULT, BECAUSE THE DEFAULT
+    # SAYS "501 UNSUPPORTED METHOD"** -- which is true and is not an
+    # answer to "can I put a file here?".  405 is the answer.
+    #
+    # **AND THE BODY IS READ AND THROWN AWAY.**  MEASURED: a refusal
+    # that does not read the body leaves it on the connection, and the
+    # next request on that connection reads the leftovers, and the
+    # server dies with
+    #
+    #     ConnectionAbortedError: [WinError 10053]
+    def do_PUT(self):
+        self._no_write()
+
+    def do_POST(self):
+        self._no_write()
+
+    def do_DELETE(self):
+        self._no_write()
+
+    def do_MKCOL(self):
+        self._no_write()
+
+    def _no_write(self) -> None:
+        """Say no, in the way a server says no to a write."""
+        self._drain_body()
+        body = b"this server serves and nothing else\n"
+        self.send_response(405)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Allow", "GET, HEAD")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _drain_body(self) -> None:
+        """Read the request's body and throw it away.
+
+        **A REQUEST THAT IS REFUSED IS STILL READ.**  The body is on
+        the connection, and if it is left there the next request reads
+        it.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except (ValueError, TypeError):
+            length = 0
+        if length <= 0:
+            return
+        try:
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
 
     def log_message(self, fmt, *args):
         """The log goes to stderr, quietly.
