@@ -228,6 +228,26 @@ def name_of(pubkey: str) -> str:
     return ""
 
 
+def _body_of(line: str) -> str:
+    """The body of the key in a key-list line, or "".
+
+    A line in the list is
+
+        environment="LJT_NAME=box-a" ssh-ed25519 AAAA... box-a
+
+    and the body is the token after the key TYPE.  So the line is
+    taken apart and the type is looked for, rather than the last
+    tokens being taken -- MEASURED: the last three tokens kept the
+    old environment option and the old comment, and the line came
+    out with two options and no key type.
+    """
+    parts = line.split()
+    for i, part in enumerate(parts):
+        if part.startswith(("ssh-", "ecdsa-", "sk-")):
+            return parts[i + 1] if i + 1 < len(parts) else ""
+    return ""
+
+
 def add_key(pubkey: str, name: str = "") -> None:
     """Let a key log in to this end's sshd.
 
@@ -259,9 +279,16 @@ def add_key(pubkey: str, name: str = "") -> None:
     # caller does not say what it is.
     if not name:
         name = name_of(key)
-    body = key.split()[-2] if len(key.split()) >= 2 else key
+    # THE BODY IS THE SECOND TOKEN, and the comment is the third.
+    # The body alone is the key's material and it is what
+    # identifies it.
+    parts = key.split()
+    body = parts[1] if len(parts) >= 2 else key
     for i, line in enumerate(lines):
-        if body and body in line:
+        # THE BODY AND NOT THE LINE.  A substring match finds the
+        # body inside a line that holds something else, and the key
+        # that gets added is then the wrong one.
+        if body and _body_of(line) == body:
             if name and f'{detect.Registry.NAME_VAR}=' not in line:
                 lines[i] = f'environment="{detect.Registry.NAME_VAR}={name}" ' \
                            + line
@@ -295,6 +322,20 @@ def set_key_name(pubkey: str, name: str) -> bool:
 
     So the name is set EXPLICITLY here, and it replaces the one that
     is there.
+
+    THE KEY IS REBUILT FROM ITS PARTS.  A line in the list is
+
+        environment="LJT_NAME=box-a" ssh-ed25519 AAAA... box-a
+
+    and the options, the type, the body and the comment are four
+    different things.  MEASURED: taking the last three tokens of the
+    line kept the OLD environment option and the old comment, and the
+    line came out as
+
+        environment="LJT_NAME=new" environment="LJT_NAME=old" AAAA... old
+
+    -- two environment options and no key type, which the sshd
+    refuses.  So the line is taken apart and put back together.
     """
     path = paths.authorized_keys()
     if not os.path.isfile(path):
@@ -305,32 +346,41 @@ def set_key_name(pubkey: str, name: str) -> bool:
     key = pubkey.strip()
     if not key:
         return False
-    body = key.split()[-2] if len(key.split()) >= 2 else key
+    # THE BODY IS THE SECOND TOKEN of the key, and the comment is the
+    # third.  The body alone is the key's material and it is what
+    # identifies it.
+    parts = key.split()
+    body = parts[1] if len(parts) >= 2 else key
 
     out = []
     changed = False
     for line in lines:
-        # THE KEY TYPE IS PART OF THE KEY.  A public key is three
-        # tokens -- the type, the body and the comment -- and the
-        # type is what tells sshd what it is.  So the body alone is
-        # not the key.
+        # ---- the line is taken apart ----
         #
-        # MEASURED: the last TWO tokens were taken, which is the
-        # body and the comment, so the type was left off and the
-        # sshd said:
-        #
-        #     authorized_keys:1: check options: 'environment="..."         #         AAAAC3NzaC1lZDI1NTE5AAAAIO0IIvO7qC0GcJ+KOCyQ0VcG...
-        #
-        # and then refused the key as "Failed publickey" -- while
-        # the panel said the key was in the list, because it WAS.
-        parts = line.split()
-        line_body = " ".join(parts[-3:]) if len(parts) >= 3 else line
-        if body and body in line_body:
-            # the options come off, the new name goes on, and the key
-            # text stays
+        # THE OPTIONS COME FIRST, and there may be more than one of
+        # them, and they are all in the first token.  So the type is
+        # the first token that LOOKS like a key type.
+        lparts = line.split()
+        ltype = ""
+        lbody = ""
+        lcomment = ""
+        for j2, part in enumerate(lparts):
+            if part.startswith(("ssh-", "ecdsa-", "sk-")):
+                ltype = part
+                if j2 + 1 < len(lparts):
+                    lbody = lparts[j2 + 1]
+                if j2 + 2 < len(lparts):
+                    lcomment = " ".join(lparts[j2 + 2:])
+                break
+        if not ltype:
+            # not a key line, so it goes as it is
+            out.append(line)
+            continue
+
+        if body and body == lbody:
             changed = True
             out.append(f'environment="{detect.Registry.NAME_VAR}={name}" '
-                       + line_body)
+                       + f"{ltype} {lbody} {name}")
         else:
             out.append(line)
 
@@ -341,7 +391,6 @@ def set_key_name(pubkey: str, name: str) -> bool:
 
     sshd.set_authorized_keys(out)
     return changed
-
 
 def remove_key(fingerprint: str) -> bool:
     """Take a key out of the list, by its FINGERPRINT.
@@ -363,11 +412,22 @@ def remove_key(fingerprint: str) -> bool:
     out = []
     removed = False
     for line in lines:
-        # the key text is the last THREE tokens -- the type, the body
-        # and the comment -- because the type is part of it
+        # THE KEY TEXT IS THE TYPE AND THE BODY, and the comment is
+        # not part of it -- the fingerprint is computed from the type
+        # and the body alone.
+        #
+        # MEASURED: the last THREE tokens were taken, which is the
+        # body and the comment, so the type was left off and the
+        # fingerprint was of a key that does not exist.
         parts = line.split()
-        body = " ".join(parts[-3:]) if len(parts) >= 3 else line
-        if detect._fingerprint_of(body) == fingerprint:
+        key_text = ""
+        for i, part in enumerate(parts):
+            if part.startswith(("ssh-", "ecdsa-", "sk-")):
+                key_text = " ".join(parts[i:i + 2])
+                break
+        if not key_text:
+            key_text = line
+        if detect._fingerprint_of(key_text) == fingerprint:
             removed = True
             continue
         out.append(line)

@@ -24,3 +24,8 @@ __pycache__/
 *.bak
 _win_checks.txt
 ljtunnel_records.json
+
+# NUL is a DEVICE NAME on Windows, so a '> NUL' in a shell
+# leaves a file that cannot be deleted.  It is not a file and
+# it is not tracked.
+/NUL

@@ -184,6 +184,17 @@ def run() -> int:
         if _old.get("pubkey"):
             L.remove_key(detect._fingerprint_of(_old["pubkey"]))
         records.remove(_old.get("name"))
+    # ---- AND THE KEYS THAT ARE LEFT, for the same reason ----
+    #
+    # A key in the list with no record is a key the panel shows as a
+    # row, and the panel is supposed to start empty.
+    for _line in L.read_keys():
+        _body = _line.split()
+        for _i, _part in enumerate(_body):
+            if _part.startswith(("ssh-", "ecdsa-", "sk-")) and _i + 1 < len(_body):
+                L.remove_key(detect._fingerprint_of(
+                    _body[_i] + " " + _body[_i + 1]))
+                break
     before = len(L.read_keys())
 
     # ---- ONE INPUT: THE KEY ----

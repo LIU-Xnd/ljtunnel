@@ -1640,6 +1640,49 @@ def test_host_key_change():
           "--name" in _dialer_src,
           "the dialer cannot be given a name")
 
+    # ---- AND THE KEY LIST IS TAKEN APART CORRECTLY ----
+    #
+    # A LINE IN THE LIST IS FOUR THINGS:
+    #
+    #     environment="LJT_NAME=box-a" ssh-ed25519 AAAA... box-a
+    #
+    # the options, the type, the body and the comment.  And the last
+    # three tokens are NOT the key: the options come first.
+    #
+    # MEASURED: taking the last three tokens kept the OLD
+    # environment option and the OLD comment, and the line came out
+    # as
+    #
+    #     environment="LJT_NAME=new" environment="LJT_NAME=old" AAAA... old
+    #
+    # -- two options and no key type, which the sshd refuses.
+    import tempfile as _tf3
+
+    with _tf3.TemporaryDirectory() as _tmp3:
+        _old3 = paths.state_dir
+        paths.state_dir = lambda: _tmp3
+        try:
+            # A FIXTURE KEY, and not a real one: the tracked tree
+            # must not carry anybody's public key.
+            _k = ("ssh-ed25519 "
+                  "AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVa"
+                  "r4KD9FAOqx thebox")
+            L.add_key(_k)
+            _line = L.read_keys()[0]
+            check("the key goes in with its name on it",
+                  "thebox" in _line and "LJT_NAME=thebox" in _line,
+                  _line[:110])
+
+            L.set_key_name(_k, "thenewname")
+            _line2 = L.read_keys()[0]
+            check("and a rename leaves ONE option and the type",
+                  _line2.count("LJT_NAME=") == 1 and "ssh-ed25519" in _line2,
+                  _line2[:130])
+            check("and the comment follows the name",
+                  _line2.rstrip().endswith("thenewname"), _line2[-40:])
+        finally:
+            paths.state_dir = _old3
+
     # ---- AND THE START DOES NOT ASK FOR ADMINISTRATOR RIGHTS ----
     #
     # THE UAC PROMPT IS ON THE SECURE DESKTOP, and it sits there

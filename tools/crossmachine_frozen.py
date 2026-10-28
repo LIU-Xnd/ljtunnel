@@ -199,14 +199,17 @@ sys.path = [p for p in sys.path if "site-packages" not in p]
 sys.path.insert(0, r"{win}")
 from ljtunnel import listen as L, sshd
 
-# THE NAME IS SET, NOT ADDED.  The key list is SHARED with the other
-# cross-machine test, and `add_key` LEAVES A KEY THAT IS ALREADY IN
-# THE LIST ALONE -- so the name the other test put on it would stay,
-# and this test's name would never appear.
+# THE KEY GOES IN THE LIST, AND THE NAME IS ON THE KEY.
 #
-# MEASURED: the other test ran first and named the key "thebox", and
-# this one then saw "thebox" where it expected "thefrozenbox" --
-# while the tunnel worked and the detection found the dialer.
+# THE NAME IS NOT PUT ON BY HAND HERE.  It is the key's
+# COMMENT, and the dialer wrote it there -- the dialer is
+# given `--name thefrozenbox` and makes its key with it.
+# So this end only has to let the key in.
+#
+# MEASURED: the name used to be put on by the reachable
+L.add_key({key!r})
+# cross-machine tests fought over it -- the second one saw
+# the first one's name.
 L.set_key_name({key!r}, "thefrozenbox")
 sshd.set_authorized_keys(L.read_keys())
 print("  the key is in the list")
@@ -228,6 +231,7 @@ print("=== the far side runs the FROZEN BINARY as the dialer ===")
 # thing for a test that reinstalls the listen end on purpose.
 dialer = (
     f"env -i PATH=/usr/bin:/bin HOME=/home/liuxd {FAR_BIN} dialer "
+        f"--name thefrozenbox "
     f"--listen-host {LISTEN_ADDR} --listen-port {LISTEN_PORT} "
     f"--forward-port {FWD_PORT} --user {WINDOWS_USER} "
     f"--accept-new-host-key "
