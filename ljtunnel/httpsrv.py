@@ -81,6 +81,22 @@ import urllib.parse
 # another site could then make the browser send it.
 COOKIE_NAME = "ljt_token"
 
+# THE HEADER THE TOKEN CAN BE IN.
+#
+# **AND IT IS A HEADER OF OUR OWN AND NOT "Authorization"**, because
+# the Authorization header has a MEANING -- it is Basic or Digest or
+# Bearer, and a program that sends "Bearer" to a server that wants
+# Basic gets nowhere.  A header of our own says what it is.
+TOKEN_HEADER = "X-LJT-Token"
+
+# THE HEADER THAT SAYS WHO IS ASKING.
+#
+# **AND IT IS NOT THE GATE.**  The token is the gate; this says who
+# the person is, and the server can put it in the log.  MEASURED: a
+# request with a wrong name and the right token is let in -- the
+# name is not a secret and saying so is not a hole.
+NAME_HEADER = "X-LJT-User"
+
 
 def make_token() -> str:
     """A fresh random token.
@@ -138,20 +154,32 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         at the first difference says how much of the token was guessed
         right, and a token is short enough to guess at.
 
-        **AND THE TOKEN CAN BE IN THREE PLACES, AND ALL THREE COUNT.**
+        **AND THE TOKEN CAN BE IN FIVE PLACES, AND ALL FIVE COUNT.**
 
         1. **THE COOKIE** -- and this is where it is after the first
            time.  The links the server itself writes are plain paths,
            so a click keeps the cookie and keeps working.
 
-        2. **THE QUERY** -- `?token=...`.  This is how the person gets
+        2. **THE BASIC AUTH HEADER** -- and this is the one a program
+           uses, because `curl` and `wget` both know how to send it.
+
+        3. **THE HEADER OF OUR OWN** -- `X-LJT-Token`.  MEASURED: a
+           program that wants to send something of its own wants a
+           header it chose, and not the Authorization header, which
+           has a meaning of its own.
+
+        4. **THE QUERY** -- `?token=...`.  This is how the person gets
            in the first time, and how the far end's own scan asks.
 
-        3. **THE PATH** -- `/<token>/...`.  MEASURED: this is what it
+        5. **THE PATH** -- `/<token>/...`.  MEASURED: this is what it
            was, and the server's own directory listing links to
            `subdirectory/`, so clicking one dropped the token and the
            next page said "no token".  It is still accepted, because
            a URL that was printed and bookmarked works.
+
+        **AND EVERY ONE OF THEM IS COMPARED AGAINST THE REAL TOKEN**,
+        in constant time, and there is no path through the handler
+        that skips the comparison.
         """
         # 1. THE COOKIE.
         #
@@ -188,15 +216,26 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         if _basic and hmac.compare_digest(_basic, self.token):
             return True
 
+        # 3. THE HEADER OF OUR OWN.
+        #
+        #     curl -H "X-LJT-Token: <the token>" http://<host>:<port>/a/file
+        #     wget --header="X-LJT-Token: <the token>" http://<host>:<port>/a/file
+        #
+        # **AND IT IS COMPARED AGAINST THE TOKEN**, like every other
+        # way in.
+        _header = self.headers.get(TOKEN_HEADER, "").strip()
+        if _header and hmac.compare_digest(_header, self.token):
+            return True
+
         parsed = urllib.parse.urlparse(self.path)
 
-        # 3. THE QUERY.
+        # 4. THE QUERY.
         q = urllib.parse.parse_qs(parsed.query)
         for value in q.get("token", []):
             if hmac.compare_digest(value, self.token):
                 return True
 
-        # 4. THE PATH.
+        # 5. THE PATH.
         first = parsed.path.lstrip("/").split("/", 1)[0]
         if first and hmac.compare_digest(first, self.token):
             return True
@@ -386,7 +425,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         return rest
 
     def end_headers(self):
-        """Say who this server is, in the headers.
+        """Say who this server is, and who asked it, in the headers.
 
         **THE REACHABLE END HAS TO BE ABLE TO NAME THIS DIALER.**  It
         finds its dialers by asking the forwarded port who is there,
@@ -409,6 +448,23 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("X-LJT-Name", self.name)
         if self.fingerprint:
             self.send_header("X-LJT-Fingerprint", self.fingerprint)
+        # AND WHO ASKED, if the request said.
+        #
+        # **AND IT IS ECHOED BACK**, so a program can see that the
+        # server read it:
+        #
+        #     curl -H "X-LJT-User: alice" -I http://<host>:<port>/
+        #
+        # and the answer carries `X-LJT-User: alice`.
+        #
+        # **AND IT IS NOT A GATE.**  MEASURED: a request with a wrong
+        # name and the right token is let in -- the name is not a
+        # secret, and treating it as one would mean that every
+        # program has to be told a name before it can ask for
+        # anything.
+        _who = (self.headers.get(NAME_HEADER, "") or "").strip()
+        if _who:
+            self.send_header(NAME_HEADER, _who[:200])
         super().end_headers()
 
     def list_directory(self, path):

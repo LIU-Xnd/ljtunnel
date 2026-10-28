@@ -337,6 +337,8 @@ def main(argv=None) -> int:
             f"http://{args.listen_host}:{ports[0]}/a/file")
         log(f"    wget --user={http_token} --password= "
             f"http://{args.listen_host}:{ports[0]}/a/file")
+        log(f"    curl -H 'X-LJT-Token: {http_token}' "
+            f"http://{args.listen_host}:{ports[0]}/a/file")
         log("")
     elif args.forward_only:
         # NOTHING IS STARTED HERE, AND THAT IS THE POINT.

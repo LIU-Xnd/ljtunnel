@@ -2217,6 +2217,45 @@ def test_host_key_change():
             check("and a prefix of the token is refused",
                   _st13 != 200, str(_st13))
 
+            # ---- AND THE HEADER OF OUR OWN ----
+            #
+            #     curl -H "X-LJT-Token: <the token>" http://<host>:<port>/a/file
+            #     wget --header="X-LJT-Token: <the token>" http://<host>:<port>/a/file
+            #
+            # **AND IT IS A HEADER OF OUR OWN AND NOT "Authorization"**,
+            # because the Authorization header has a MEANING -- it is
+            # Basic or Digest or Bearer -- and a program that sends
+            # "Bearer" to a server that wants Basic gets nowhere.
+            def _get_hdr13(_path, _token_value, _user=None):
+                _c13h = _hc5.HTTPConnection("127.0.0.1", _p13, timeout=10)
+                _hh = {"X-LJT-Token": _token_value}
+                if _user:
+                    _hh["X-LJT-User"] = _user
+                _c13h.request("GET", _path, headers=_hh)
+                _r13h = _c13h.getresponse()
+                _b13h = _r13h.read()
+                _st13h = _r13h.status
+                _who13 = _r13h.getheader("X-LJT-User") or ""
+                _c13h.close()
+                return _st13h, _b13h, _who13
+
+            _st13, _b13, _who13 = _get_hdr13("/readme.txt", _tok13)
+            check("and the header of our own is let in",
+                  _st13 == 200 and b"A FILE" in _b13,
+                  f"{_st13} {_b13[:40]}")
+
+            _st13, _b13, _who13 = _get_hdr13("/readme.txt", "wrong")
+            check("and the WRONG header is refused",
+                  _st13 != 200, str(_st13))
+
+            # AND THE NAME IS ECHOED BACK, AND IT IS NOT A GATE.
+            _st13, _b13, _who13 = _get_hdr13("/readme.txt", _tok13, "alice")
+            check("and the name is echoed back",
+                  _who13 == "alice", repr(_who13))
+            _st13, _b13, _who13 = _get_hdr13("/readme.txt", _tok13, "bob")
+            check("and a name is not a gate",
+                  _st13 == 200, str(_st13))
+
             # AND A WRONG COOKIE IS REFUSED TOO.
             _jar13["ljt_token"] = "wrongtoken"
             _st13, _b13, _loc13 = _get13("/readme.txt")

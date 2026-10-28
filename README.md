@@ -214,6 +214,31 @@ curl -u <the token>: http://<the reachable end>:<the forwarded port>/a/file
 wget --user=<the token> --password= http://<the reachable end>:<the forwarded port>/a/file
 ```
 
+**AND THE TOKEN CAN BE IN A HEADER OF OUR OWN**, which is the one to
+use when the program wants to send something else as well:
+
+```bash
+curl -H "X-LJT-Token: <the token>" http://<host>:<the port>/a/file
+wget --header="X-LJT-Token: <the token>" http://<host>:<the port>/a/file
+```
+
+It is `X-LJT-Token` and not `Authorization`, because `Authorization`
+has a meaning of its own -- it is Basic or Digest or Bearer -- and a
+program that sends `Bearer` to a server that wants Basic gets
+nowhere.
+
+**AND A REQUEST CAN SAY WHO IT IS**, in `X-LJT-User`, and the server
+echoes it back:
+
+```bash
+curl -H "X-LJT-Token: <the token>" -H "X-LJT-User: alice" -I http://<host>:<the port>/
+```
+
+**AND THE NAME IS NOT A GATE.**  A request with a wrong name and the
+right token is let in: the name is not a secret, and treating it as
+one would mean every program has to be told a name before it can ask
+for anything.
+
 **AND A REQUEST WITH NO CREDENTIALS AT ALL IS A 401**, with a
 `WWW-Authenticate` header -- and not a 404.  A 404 tells a program
 "there is nothing here"; a 401 says "not yet, and here is how", and
