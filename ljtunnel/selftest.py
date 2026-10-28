@@ -1909,6 +1909,365 @@ def test_host_key_change():
         finally:
             _srv5.shutdown()
 
+    # ---- AND THE HTTP SERVER CAN BE TOLD TO ALLOW WRITING ----
+    #
+    # THE SWITCH IS OFF UNLESS IT IS ASKED FOR, and it is checked in
+    # both states: a read-only server refuses, and one that allows
+    # writing does it.
+    import http.client as _hc11
+    import uuid as _uu11
+
+    with _tf5.TemporaryDirectory() as _w11:
+        with open(os.path.join(_w11, "index.html"), "w", encoding="utf-8") as _fh11:
+            _fh11.write("IT_WORKS\n")
+
+        def _req11(_port, _method, _path, _body=None, _headers=None):
+            _c = _hc11.HTTPConnection("127.0.0.1", _port, timeout=10)
+            _c.request(_method, _path, body=_body, headers=_headers or {})
+            _r = _c.getresponse()
+            _b = _r.read()
+            _c.close()
+            return _r.status, _b
+
+        # ---- the read-only one ----
+        _s11, _t11 = _hs5.serve(_w11, 0, "TOKEN")
+        _p11 = _s11.server_address[1]
+        try:
+            check("a read-only server refuses an upload",
+                  _req11(_p11, "PUT", "/TOKEN/new.txt", b"X")[0] == 405,
+                  str(_req11(_p11, "PUT", "/TOKEN/new.txt", b"X")[0]))
+            check("and a delete",
+                  _req11(_p11, "DELETE", "/TOKEN/index.html")[0] == 405,
+                  str(_req11(_p11, "DELETE", "/TOKEN/index.html")[0]))
+            check("and the file is still there",
+                  os.path.isfile(os.path.join(_w11, "index.html")), "gone")
+        finally:
+            _s11.shutdown()
+
+        # ---- the one that allows writing ----
+        _s11b, _t11b = _hs5.serve(_w11, 0, "TOKEN", allow_edit=True)
+        _p11b = _s11b.server_address[1]
+        try:
+            check("with the switch on an upload works",
+                  _req11(_p11b, "PUT", "/TOKEN/new.txt", b"DATA")[0] in (201, 204),
+                  str(_req11(_p11b, "PUT", "/TOKEN/new.txt", b"DATA")[0]))
+            check("and the file is there with the right bytes",
+                  os.path.isfile(os.path.join(_w11, "new.txt"))
+                  and open(os.path.join(_w11, "new.txt"), "rb").read() == b"DATA",
+                  "not there or wrong")
+            check("and a directory can be made",
+                  _req11(_p11b, "MKCOL", "/TOKEN/made")[0] == 201,
+                  str(_req11(_p11b, "MKCOL", "/TOKEN/made")[0]))
+            check("and it is there",
+                  os.path.isdir(os.path.join(_w11, "made")), "not there")
+            check("and a delete works",
+                  _req11(_p11b, "DELETE", "/TOKEN/new.txt")[0] == 204,
+                  str(_req11(_p11b, "DELETE", "/TOKEN/new.txt")[0]))
+            check("and the file is gone",
+                  not os.path.isfile(os.path.join(_w11, "new.txt")), "still there")
+
+            # AND THE ROOT ITSELF IS NOT DELETABLE.
+            check("but the root is not deletable",
+                  _req11(_p11b, "DELETE", "/TOKEN/")[0] == 403,
+                  str(_req11(_p11b, "DELETE", "/TOKEN/")[0]))
+            check("and it is still there",
+                  os.path.isdir(_w11), "gone")
+
+            # AND A PATH THAT WALKS OUT IS REFUSED, AND NOT BROUGHT
+            # BACK.  MEASURED: it was normalised first, so `..` became
+            # the root itself and the write said "it worked".
+            check("and a path that walks out is refused",
+                  _req11(_p11b, "PUT", "/TOKEN/../escape.txt", b"X")[0] == 403,
+                  str(_req11(_p11b, "PUT", "/TOKEN/../escape.txt", b"X")[0]))
+            check("and from a subdirectory too",
+                  _req11(_p11b, "PUT", "/TOKEN/sub/../../escape.txt", b"X")[0] == 403,
+                  str(_req11(_p11b, "PUT", "/TOKEN/sub/../../escape.txt", b"X")[0]))
+            check("and the file outside is not there",
+                  not os.path.isfile(os.path.join(os.path.dirname(_w11),
+                                                  "escape.txt")), "it is there")
+
+            # AND THE LIST PAGE HAS AN UPLOAD FORM IN IT.
+            _s11c, _b11 = _req11(_p11b, "GET", "/TOKEN/")
+            _h11 = _b11.decode("utf-8", "replace")
+            check("and the list page has an upload form",
+                  "<form" in _h11 and 'type="file"' in _h11, _h11[:80])
+            check("and it says that writing is on",
+                  "UPLOAD AND DELETE ARE ON" in _h11, _h11[:80])
+
+            # AND A BROWSER'S FORM POSTS, AND THE FILE IS TAKEN OUT OF
+            # IT.  A BROWSER CANNOT SEND A PUT.
+            _bnd11 = "----ljt" + _uu11.uuid4().hex
+            _crlf11 = "\r\n"
+            _body11 = (
+                "--" + _bnd11 + _crlf11
+                + 'Content-Disposition: form-data; name="file"; '
+                  'filename="posted.txt"' + _crlf11
+                + "Content-Type: text/plain" + _crlf11 + _crlf11
+                + "POSTED" + _crlf11
+                + "--" + _bnd11 + "--" + _crlf11
+            ).encode()
+            _st11 = _req11(_p11b, "POST", "/TOKEN/?upload", _body11,
+                           {"Content-Type":
+                            "multipart/form-data; boundary=" + _bnd11,
+                            "Content-Length": str(len(_body11))})[0]
+            check("and a form upload works", _st11 in (200, 303), str(_st11))
+            check("and the file is there with the right bytes",
+                  os.path.isfile(os.path.join(_w11, "posted.txt"))
+                  and open(os.path.join(_w11, "posted.txt"), "rb").read()
+                  == b"POSTED", "not there or wrong")
+        finally:
+            _s11b.shutdown()
+
+    # ---- AND A PATH IS RESOLVED INSIDE THE DIRECTORY, OR NOT AT ALL ----
+    #
+    # **THE RESOLVE HAS TWO DEFENCES AND BOTH ARE NEEDED.**  The first
+    # is that a path that walks up is refused.  The second is that the
+    # file name is checked to be inside the directory.
+    #
+    # MEASURED: with the first one alone, a sibling whose name starts
+    # with the root's name was inside it -- /data/pub2 is not inside
+    # /data/pub -- so the check has the SEPARATOR in it.
+    #
+    # IT IS CHECKED ON THE RESOLVE, because the resolve is what
+    # answers "where does this path name".
+    with _tf5.TemporaryDirectory() as _w12:
+        _sib12 = os.path.join(os.path.dirname(_w12),
+                              os.path.basename(_w12) + "2")
+        os.makedirs(_sib12, exist_ok=True)
+        # THE HANDLE IS MADE WITHOUT THE CONSTRUCTOR: the base class
+        # wants a request and a socket, and this is only about the
+        # path.
+        _probe12 = _hs5._Handler.__new__(_hs5._Handler)
+        _probe12.root = os.path.abspath(_w12)
+        _probe12.path = "/" + os.path.basename(_sib12) + "/file.txt"
+        try:
+            _out12 = _probe12._resolve(_probe12.path)
+            check("a sibling directory is not inside the root",
+                  _out12 == "" or _out12.startswith(
+                      os.path.abspath(_w12) + os.sep),
+                  repr(_out12))
+        finally:
+            try:
+                os.rmdir(_sib12)
+            except OSError:
+                pass
+
+    # ---- AND THE TOKEN TABLE IS A TABLE, AND IT IS PRIVATE ----
+    #
+    # ONE TOKEN IS ONE PERSON, and one person cannot share a machine
+    # with anybody else without giving them everything.  So there are
+    # TEN of them by default, in a table, and the table is PRIVATE --
+    # it holds the keys to the door.
+    import tempfile as _tf13
+
+    from ljtunnel import httptokens as _ht13
+
+    with _tf13.TemporaryDirectory() as _td13:
+        _old13 = os.environ.get("LOCALAPPDATA")
+        _old13x = os.environ.get("XDG_STATE_HOME")
+        os.environ["LOCALAPPDATA"] = _td13
+        os.environ["XDG_STATE_HOME"] = _td13
+        try:
+            _toks13 = _ht13.ensure_table()
+            check("the table has ten tokens by default",
+                  len(_toks13) == 10, str(len(_toks13)))
+            check("and they are all different",
+                  len(set(_toks13)) == 10, str(len(set(_toks13))))
+            check("and the table is there",
+                  os.path.isfile(_ht13.table_path()),
+                  _ht13.table_path())
+            _body13 = open(_ht13.table_path(), encoding="utf-8").read()
+            check("and it is a text file with a comment",
+                  _body13.lstrip().startswith("#")
+                  and _toks13[0] in _body13, _body13[:60])
+            if os.name != "nt":
+                check("and it is not readable by other people",
+                      (os.stat(_ht13.table_path()).st_mode & 0o077) == 0,
+                      oct(os.stat(_ht13.table_path()).st_mode & 0o777))
+                check("and neither is its directory",
+                      (os.stat(_ht13.token_dir()).st_mode & 0o077) == 0,
+                      oct(os.stat(_ht13.token_dir()).st_mode & 0o777))
+
+            # AND ON EVERY PLATFORM THE PRIVATE MODE IS ASKED FOR,
+            # because the permission check above only runs on the
+            # machine where the mode means something.
+            #
+            # MEASURED: the directory was made 0755 and nothing said
+            # so on the machine where the check cannot run.  So the
+            # mode is ASKED FOR, and the check asks the same question
+            # on every machine.
+            check("and the directory's mode is private",
+                  _ht13.DIR_MODE == 0o700, oct(_ht13.DIR_MODE))
+            check("and the file's mode is private",
+                  _ht13.FILE_MODE == 0o600, oct(_ht13.FILE_MODE))
+            _probe13 = os.path.join(_td13, "probe-dir")
+            _ht13._ensure_private_dir(_probe13)
+            if os.name != "nt":
+                _mode13 = os.stat(_probe13).st_mode & 0o777
+                check("and the directory really is private",
+                      (_mode13 & 0o077) == 0, oct(_mode13))
+            check("and the table is made with ten",
+                  _ht13.DEFAULT_TOKENS == 10,
+                  str(_ht13.DEFAULT_TOKENS))
+
+            # AND THE TABLE CAN BE MADE BIGGER, AND THE OLD ONES STAY.
+            _before13 = list(_ht13.read_tokens())
+            _after13 = _ht13.expand(3)
+            check("the table can be made bigger",
+                  len(_after13) == len(_before13) + 3,
+                  f"{len(_before13)} -> {len(_after13)}")
+            check("and the old tokens stay",
+                  _after13[:len(_before13)] == _before13, "they moved")
+
+            # AND THE OWNER RECORDS ARE HASHED NAMES, SO THEY CANNOT BE
+            # WALKED AND THEY DO NOT SAY WHAT THE FILE IS CALLED.
+            _ht13.set_owner("some/file.txt", "TOKEN1")
+            check("the owner of a file is remembered",
+                  _ht13.owner_of("some/file.txt") == "TOKEN1",
+                  repr(_ht13.owner_of("some/file.txt")))
+            _files13 = os.listdir(_ht13.owners_dir())
+            check("and the record is not named after the file",
+                  all("some" not in f and "file" not in f for f in _files13),
+                  str(_files13))
+            _ht13.clear_owner("some/file.txt")
+            check("and it is forgotten when the file goes",
+                  _ht13.owner_of("some/file.txt") == "",
+                  repr(_ht13.owner_of("some/file.txt")))
+        finally:
+            if _old13 is not None:
+                os.environ["LOCALAPPDATA"] = _old13
+            else:
+                os.environ.pop("LOCALAPPDATA", None)
+            if _old13x is not None:
+                os.environ["XDG_STATE_HOME"] = _old13x
+            else:
+                os.environ.pop("XDG_STATE_HOME", None)
+
+    # ---- AND THE COMMAND THAT MAKES THE TABLE BIGGER ----
+    #
+    # IT IS `ljtunnel dialer expand-tokens N`, and it ADDS to the
+    # table.  MEASURED: it did not make the table first, so the first
+    # `expand-tokens 3` left a table of three and the ten that are
+    # supposed to be there were not.
+    import subprocess as _sp13
+
+    with _tf13.TemporaryDirectory() as _td13b:
+        _env13 = dict(_sp13.os.environ)
+        _env13["LOCALAPPDATA"] = _td13b
+        _env13["XDG_STATE_HOME"] = _td13b
+        _root13 = _sp13.os.path.dirname(
+            _sp13.os.path.dirname(_sp13.os.path.abspath(__file__)))
+        _cmd13 = [_sp13.sys.executable, "-m", "ljtunnel", "dialer",
+                  "expand-tokens", "3"]
+        _o13 = ""
+        for _ in range(2):
+            _r13 = _sp13.run(_cmd13, capture_output=True, text=True,
+                             errors="replace", timeout=180,
+                             cwd=_root13, env=_env13)
+            _o13 += (_r13.stdout or "") + (_r13.stderr or "")
+        _toks13b = _ht13.read_tokens() if False else []
+        _tp13 = os.path.join(_td13b, "ljtunnel-http-token", "token-filetable")
+        _toks13b = []
+        if os.path.isfile(_tp13):
+            with open(_tp13, encoding="utf-8") as _fh13b:
+                _toks13b = [l.strip() for l in _fh13b
+                            if l.strip() and not l.strip().startswith("#")]
+        # TEN TO START WITH, AND THREE FOR EACH RUN -- and the run
+        # happens twice, so it is sixteen.
+        check("the command makes the table with ten and then adds",
+              len(_toks13b) == 16, str(len(_toks13b)))
+        check("and says so",
+              "made with 10" in _o13 or "there are 16" in _o13,
+              _o13.strip()[-80:])
+
+        # AND NO NUMBER IS NOT "ADD ONE".
+        _r13b = _sp13.run([_sp13.sys.executable, "-m", "ljtunnel", "dialer",
+                            "expand-tokens"],
+                           capture_output=True, text=True,
+                           errors="replace", timeout=180,
+                           cwd=_root13, env=_env13)
+        _o13b = (_r13b.stdout or "") + (_r13b.stderr or "")
+        check("and with no number it does nothing",
+              _r13b.returncode == 2 and "how many" in _o13b,
+              f"{_r13b.returncode} {_o13b.strip()[-60:]}")
+
+    # ---- AND THE THREE RULES: READ, WRITE, AND DELETE ----
+    #
+    # THE DELETE RULE IS THE ONE THAT MATTERS.  Everybody with a token
+    # can put a file in, and everybody with a token can take one out
+    # -- but only the person whose token put it there can take IT out.
+    with _tf5.TemporaryDirectory() as _w14:
+        with open(os.path.join(_w14, "index.html"), "w", encoding="utf-8") as _fh14:
+            _fh14.write("IT_WORKS\n")
+
+        _old14 = os.environ.get("LOCALAPPDATA")
+        _old14x = os.environ.get("XDG_STATE_HOME")
+        os.environ["LOCALAPPDATA"] = _w14
+        os.environ["XDG_STATE_HOME"] = _w14
+        try:
+            _t14 = [_hs5.make_token(), _hs5.make_token()]
+
+            def _req14(_port, _method, _path, _tok, _body=None):
+                _c = _hc11.HTTPConnection("127.0.0.1", _port, timeout=10)
+                _c.request(_method, "/" + _tok + _path, body=_body)
+                _r = _c.getresponse()
+                _b = _r.read()
+                _c.close()
+                return _r.status, _b
+
+            _s14, _ = _hs5.serve(_w14, 0, tokens=_t14, allow_edit=True)
+            _p14 = _s14.server_address[1]
+            try:
+                # ---- reading: ANY token ----
+                check("any token can read",
+                      _req14(_p14, "GET", "/index.html", _t14[0])[0] == 200,
+                      str(_req14(_p14, "GET", "/index.html", _t14[0])[0]))
+                check("and so can the other one",
+                      _req14(_p14, "GET", "/index.html", _t14[1])[0] == 200,
+                      str(_req14(_p14, "GET", "/index.html", _t14[1])[0]))
+                check("but a token that is not in the table cannot",
+                      _req14(_p14, "GET", "/index.html", "notatoken")[0] == 404,
+                      str(_req14(_p14, "GET", "/index.html", "notatoken")[0]))
+
+                # ---- writing: any token ----
+                check("any token can upload",
+                      _req14(_p14, "PUT", "/mine.txt", _t14[0], b"BY1")[0]
+                      in (201, 204), "")
+                check("and so can the other one",
+                      _req14(_p14, "PUT", "/theirs.txt", _t14[1], b"BY2")[0]
+                      in (201, 204), "")
+                check("but a token that is not in the table cannot",
+                      _req14(_p14, "PUT", "/nope.txt", "notatoken", b"X")[0]
+                      == 404, "")
+
+                # ---- deleting: ONLY THE OWNING TOKEN ----
+                check("a file can be deleted by the token that put it there",
+                      _req14(_p14, "DELETE", "/mine.txt", _t14[0])[0] == 204,
+                      str(_req14(_p14, "DELETE", "/mine.txt", _t14[0])[0]))
+                check("but NOT by another token",
+                      _req14(_p14, "DELETE", "/theirs.txt", _t14[0])[0] == 403,
+                      str(_req14(_p14, "DELETE", "/theirs.txt", _t14[0])[0]))
+                check("and the file is still there",
+                      os.path.isfile(os.path.join(_w14, "theirs.txt")),
+                      "it is gone")
+                check("and it can be deleted by its own token",
+                      _req14(_p14, "DELETE", "/theirs.txt", _t14[1])[0] == 204,
+                      str(_req14(_p14, "DELETE", "/theirs.txt", _t14[1])[0]))
+                check("and now it is gone",
+                      not os.path.isfile(os.path.join(_w14, "theirs.txt")),
+                      "it is still there")
+            finally:
+                _s14.shutdown()
+        finally:
+            if _old14 is not None:
+                os.environ["LOCALAPPDATA"] = _old14
+            else:
+                os.environ.pop("LOCALAPPDATA", None)
+            if _old14x is not None:
+                os.environ["XDG_STATE_HOME"] = _old14x
+            else:
+                os.environ.pop("XDG_STATE_HOME", None)
+
     # ---- AND THE HTTP SERVER SAYS WHO IT IS ----
     #
     # A PORT BEHIND AN HTTP SERVER HAS NO HOST KEY BEHIND IT, so the
@@ -2017,6 +2376,16 @@ def test_host_key_change():
     _a6b = _p6.parse_args(["--listen-host", "192.0.2.7"])
     check("and it is off unless it is asked for",
           not _a6b.http_server, str(_a6b))
+
+    # AND THE WRITING SWITCH IS OFF UNLESS IT IS ASKED FOR.
+    check("and the writing switch is off unless it is asked for",
+          not _a6b.http_allow_edit, str(_a6b))
+    check("and it is off for the plain http server too",
+          not _a6.http_allow_edit, str(_a6))
+    _a6c = _p6.parse_args(["--listen-host", "192.0.2.7", "--http-server",
+                           "--http-directory", "/tmp/x", "--http-allow-edit"])
+    check("and the dialer has --http-allow-edit", _a6c.http_allow_edit,
+          str(_a6c))
 
     # ---- AND THE HTTP MODE FORWARDS TO THE HTTP PORT ----
     #
