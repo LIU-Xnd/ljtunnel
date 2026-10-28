@@ -71,7 +71,7 @@ import subprocess
 import sys
 import time
 
-from . import detect, listen, paths, sshd
+from . import detect, httpsrv, listen, paths, sshd
 from . import quiet
 
 
@@ -109,6 +109,19 @@ def build_parser() -> argparse.ArgumentParser:
                    help="accept the reachable end's host key even if it "
                         "is not the one this end remembers -- use it "
                         "after the reachable end has been reinstalled")
+    p.add_argument("--http-server", action="store_true",
+                   help="serve a directory over http instead of running an "
+                        "sshd here: the forwarded port lands on this end's "
+                        "http server, and the URL carries a token")
+    p.add_argument("--http-directory", default=None, metavar="DIR",
+                   help="the directory to serve over http (with "
+                        "--http-server)")
+    p.add_argument("--http-port", type=int, default=10001, metavar="N",
+                   help="the port this end's http server listens on "
+                        "(default: 10001)")
+    p.add_argument("--http-token", default=None, metavar="TOKEN",
+                   help="the token the http URL must carry (default: a "
+                        "fresh random one, made at run time)")
     p.add_argument("--print-only", action="store_true",
                    help="print what this would do and exit")
     return p
@@ -132,13 +145,38 @@ def main(argv=None) -> int:
     # something anybody can act on.
     ports = _ports_to_try(args)
 
+    # THE HTTP SERVER'S TOKEN AND DIRECTORY.
+    #
+    # The token is made HERE, before anything is started, so the log
+    # can print the URL and the person can use it.
+    http_token = ""
+    service_port = args.http_port if args.http_server else args.local_port
+    if args.http_server:
+        if not args.http_directory:
+            log("--http-server needs --http-directory")
+            return 2
+        if not os.path.isdir(args.http_directory):
+            log(f"{args.http_directory} is not a directory")
+            return 2
+        # THE TOKEN IS READ, OR MADE, AND THEN KEPT.
+        #
+        # A token that changes on every run is a URL that works today
+        # and not tomorrow.
+        http_token = (args.http_token or "").strip()
+        if not http_token:
+            http_token = _read_or_make_http_token()
+
     log("")
     log("  ljtunnel dialer -- the unreachable end")
     log(f"    the reachable end : {args.listen_host}:{args.listen_port}")
     log(f"    asking it to forward {ports[0]}"
         + (f"-{ports[-1]}" if len(ports) > 1 else "")
-        + f" -> 127.0.0.1:{args.local_port}")
-    log(f"    this end's sshd   : 127.0.0.1:{args.local_port}")
+        + f" -> 127.0.0.1:{service_port}")
+    if args.http_server:
+        log(f"    this end's http   : 127.0.0.1:{service_port}")
+        log(f"    serving           : {args.http_directory}")
+    else:
+        log(f"    this end's sshd   : 127.0.0.1:{service_port}")
     log("")
 
     paths.ensure_dir(paths.state_dir())
@@ -162,7 +200,10 @@ def main(argv=None) -> int:
     # The end user's key goes into this end's key list, so the person
     # can log in here. It is added, not replaced: the list may already
     # hold the user's own key, and taking that away would be rude.
-    if args.access_key:
+    #
+    # AND THE HTTP SERVER DOES NOT NEED IT: the token in the URL is
+    # what lets somebody in, and there is no sshd to check a key.
+    if args.access_key and not args.http_server:
         add_key(args.access_key)
 
     # The machine key: this end's identity to the listen end.
@@ -180,48 +221,73 @@ def main(argv=None) -> int:
     log("    (put this in the reachable end's key list)")
     log("")
 
-    # The key list this end's sshd accepts: the end user's key.
-    n_keys = len(read_keys())
-    log(f"  the keys allowed into this end's sshd: {n_keys}")
-    if n_keys == 0:
-        log("    (none yet -- until there is one, nobody can log in here)")
-    log("")
-    # THE ACCOUNT ON THIS END.  The person who connects through the
-    # forwarded port has to give a name that exists HERE, and this
-    # end's accounts are not the reachable end's accounts.
-    #
-    # MEASURED: "Permission denied (publickey,keyboard-interactive)"
-    # with a key that was perfectly good, because the name was the
-    # reachable end's and not this end's.
-    log(f"  a person connects through the forwarded port as: "
-        f"{local_account}")
-    log("")
+    if args.http_server:
+        # THE HTTP SERVER, AND NO SSHD.
+        #
+        # The tunnel's other shape: the unreachable end offers a WEB
+        # PAGE, and the reachable end's forwarded port lands on it.
+        # There is no sshd on this end, so there is no key list and no
+        # account to name -- the TOKEN in the URL is what lets
+        # somebody in.
+        log("  the http server:")
+        log(f"    serving: {os.path.abspath(args.http_directory)}")
+        log(f"    on port: {args.http_port}")
+        log(f"    the token: {http_token}")
+        log("")
+    else:
+        # The key list this end's sshd accepts: the end user's key.
+        n_keys = len(read_keys())
+        log(f"  the keys allowed into this end's sshd: {n_keys}")
+        if n_keys == 0:
+            log("    (none yet -- until there is one, nobody can log in here)")
+        log("")
+        # THE ACCOUNT ON THIS END.  The person who connects through the
+        # forwarded port has to give a name that exists HERE, and this
+        # end's accounts are not the reachable end's accounts.
+        #
+        # MEASURED: "Permission denied (publickey,keyboard-interactive)"
+        # with a key that was perfectly good, because the name was the
+        # reachable end's and not this end's.
+        log(f"  a person connects through the forwarded port as: "
+            f"{local_account}")
+        log("")
 
     if args.print_only:
         return 0
 
-    # 1. this end's sshd, on its own port
-    log("  starting this end's sshd ...")
-    # THIS END'S SSHD PRESENTS THE MACHINE KEY AS ITS HOST KEY.
+    # 1. this end's service: an sshd, or an http server
     #
-    # The listen end finds its dialers by asking the forwarded port
-    # who is there, and the answer is the host key behind it.  So
-    # the key behind a forwarded port has to be a key the listen end
-    # KNOWS, and the only one it knows is the one the dialer logged
-    # in with.  So the two are the same key.
+    # THE HTTP SERVER IS ON THIS END AND THE SSHD IS NOT, and the
+    # tunnel's other shape is exactly that: the unreachable end offers
+    # a web page and the reachable end's forwarded port lands on it.
     #
-    # One key, two jobs, and it is still one key on disk.
-    srv = sshd.start(args.local_port, listen="127.0.0.1",
-                     gateway_ports=False, allow_forwarding=False,
-                     host_key=key, allowed_users=local_account)
-    time.sleep(1.5)
-    if srv.poll() is not None:
-        log("  the sshd did not start.")
-        if sshd.port_busy(args.local_port, "127.0.0.1"):
-            log(f"  port {args.local_port} is held by another process.")
-        _dump(paths.log_file())
-        return 1
-    log(f"  the sshd is up (pid {srv.pid})")
+    # AND THE PORT THE FORWARD GOES TO IS THE SERVICE'S PORT, so it
+    # is worked out here and used by the forward command.
+    srv = None
+    http_srv = None
+    if args.http_server:
+        log("  starting this end's http server ...")
+        # THE FINGERPRINT IS OF THE MACHINE KEY -- the key this end
+        # logs in to the reachable end with.  So the reachable end can
+        # look the name up in its own key list, and a dialer cannot
+        # call itself something it is not.
+        _fp = _fingerprint_of_key(key)
+        try:
+            http_srv, http_token = httpsrv.serve(
+                args.http_directory, args.http_port, http_token,
+                name=name, fingerprint=_fp)
+        except OSError as e:
+            log(f"  the http server did not start: {e}")
+            return 1
+        log(f"  the http server is up on 127.0.0.1:{args.http_port}")
+        log("")
+        log("  the URL, once the tunnel is up:")
+        log(f"    http://{args.listen_host}:{ports[0]}/{http_token}/")
+        log("")
+    else:
+        srv = _start_sshd(args, key, local_account)
+        if srv is None:
+            return 1
 
     # 2. the forwarding connection
     #
@@ -277,7 +343,8 @@ def main(argv=None) -> int:
             log("  because the host key is the one thing in this")
             log("  protocol that cannot be faked.")
             _kill(srv)
-            sshd.stop()
+            if not args.http_server:
+                sshd.stop()
             return 1
 
         # ---- AND THE PERSON SAID SO ----
@@ -298,7 +365,7 @@ def main(argv=None) -> int:
     fwd = None
     got = 0
     for port in ports:
-        cmd = _forward_command(args, key, port, user)
+        cmd = _forward_command(args, key, port, user, service_port)
         log("")
         log(f"  asking for port {port} ...")
         fwd = quiet.popen_hidden(cmd, stdout=subprocess.DEVNULL,
@@ -315,7 +382,28 @@ def main(argv=None) -> int:
             fwd = None
             continue
 
-        # the client says it worked.  Check.
+        # THE CLIENT SAYS IT WORKED.  CHECK IT -- UNLESS THERE IS
+        # NOTHING TO CHECK IT AGAINST.
+        #
+        # The check reads the HOST KEY behind the port, and the host
+        # key is this end's sshd's.  With the http server there is no
+        # sshd on this end, so there is no host key to compare, and
+        # the check would say "not ours" about every port.
+        #
+        # So with the http server the client's word is taken, and the
+        # port is checked for being OPEN instead -- which is a weaker
+        # check, and it is honest about it.
+        if args.http_server:
+            if _port_is_open(args.listen_host, port):
+                got = port
+                log(f"  yes: port {port} is forwarding to this end")
+                break
+            log(f"  the client said yes but port {port} is not open. "
+                f"Trying the next one.")
+            _kill(fwd)
+            fwd = None
+            continue
+
         if _port_is_ours(args, port):
             got = port
             log(f"  yes: port {port} is forwarding to this end")
@@ -331,12 +419,13 @@ def main(argv=None) -> int:
         log(f"  no port in {ports[0]}-{ports[-1]} could be taken.")
         log("  The reachable end may already have that many dialers.")
         _kill(srv)
-        sshd.stop()
+        if not args.http_server:
+            sshd.stop()
         return 1
 
     log("")
     log(f"  the forwarding command:")
-    log("    " + " ".join(_forward_command(args, key, got, user)))
+    log("    " + " ".join(_forward_command(args, key, got, user, service_port)))
     log("")
 
     try:
@@ -357,10 +446,91 @@ def main(argv=None) -> int:
     finally:
         _kill(fwd)
         _kill(srv)
-        sshd.stop()
+        if not args.http_server:
+            sshd.stop()
+        if http_srv is not None:
+            try:
+                http_srv.shutdown()
+            except Exception:
+                pass
 
     log("  stopped")
     return 0
+
+
+def _fingerprint_of_key(key: str) -> str:
+    """The SHA256 fingerprint of a key file's public half, or "".
+
+    IT IS THE FINGERPRINT THE WAY SSHD PRINTS IT: SHA256 over the
+    base64 body, with the padding taken off.
+    """
+    if not key or not os.path.isfile(key + ".pub"):
+        return ""
+    try:
+        r = quiet.run_hidden([sshd.ssh_keygen_path(), "-lf", key + ".pub"],
+                           capture_output=True, text=True,
+                           errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    parts = (r.stdout or "").strip().split()
+    return parts[1] if len(parts) >= 2 else ""
+
+
+def _read_or_make_http_token() -> str:
+    """The http server's token: the one that was made, or a new one.
+
+    IT IS KEPT IN THE STATE DIRECTORY, so it survives a restart.
+    """
+    path = paths.http_token()
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                tok = fh.read().strip()
+            if tok:
+                return tok
+        except OSError:
+            pass
+    tok = httpsrv.make_token()
+    try:
+        paths.ensure_dir(paths.state_dir())
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(tok)
+        # THE TOKEN IS A SECRET, so the file is not everybody's.
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return tok
+
+
+def _start_sshd(args, key: str, local_account: str):
+    """Start this end's sshd, and return the process -- or None.
+
+    THIS END'S SSHD PRESENTS THE MACHINE KEY AS ITS HOST KEY.
+
+    The listen end finds its dialers by asking the forwarded port who
+    is there, and the answer is the host key behind it.  So the key
+    behind a forwarded port has to be a key the listen end KNOWS, and
+    the only one it knows is the one the dialer logged in with.  So the
+    two are the same key.
+
+    One key, two jobs, and it is still one key on disk.
+    """
+    log("  starting this end's sshd ...")
+    srv = sshd.start(args.local_port, listen="127.0.0.1",
+                     gateway_ports=False, allow_forwarding=False,
+                     host_key=key, allowed_users=local_account)
+    time.sleep(1.5)
+    if srv.poll() is not None:
+        log("  the sshd did not start.")
+        if sshd.port_busy(args.local_port, "127.0.0.1"):
+            log(f"  port {args.local_port} is held by another process.")
+        _dump(paths.log_file())
+        return None
+    log(f"  the sshd is up (pid {srv.pid})")
+    return srv
 
 
 def _ports_to_try(args) -> list:
@@ -376,8 +546,15 @@ def _ports_to_try(args) -> list:
     return list(range(first, first + max(1, args.forward_range)))
 
 
-def _forward_command(args, key: str, port: int, user: str) -> list:
-    """The ssh command that asks the reachable end for that port."""
+def _forward_command(args, key: str, port: int, user: str,
+                     service_port: int = None) -> list:
+    """The ssh command that asks the reachable end for that port.
+
+    THE SERVICE'S PORT IS WHERE THE FORWARD LANDS, and it is not
+    always the sshd's own port: with the http server it is the http
+    server's port.
+    """
+    target = args.local_port if service_port is None else service_port
     return [
         sshd.ssh_path(), "-N",
         "-p", str(args.listen_port),
@@ -389,7 +566,7 @@ def _forward_command(args, key: str, port: int, user: str) -> list:
         "-o", "ExitOnForwardFailure=yes",
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=3",
-        "-R", f"0.0.0.0:{port}:127.0.0.1:{args.local_port}",
+        "-R", f"0.0.0.0:{port}:127.0.0.1:{target}",
         f"{user}@{args.listen_host}",
     ]
 
@@ -544,6 +721,25 @@ def _port_is_ours(args, port: int) -> bool:
 
     theirs = detect.host_key_fingerprint(port, args.listen_host, timeout=20)
     return bool(theirs) and theirs == mine
+
+
+def _port_is_open(host: str, port: int, timeout: float = 6.0) -> bool:
+    """Whether something is listening on that port, or "".
+
+    THIS IS THE WEAKER CHECK, and it is used when there is no host key
+    to compare against.  It says a port is open, and not that the
+    thing on it is this end's.
+    """
+    import socket
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        return False
+    try:
+        s.close()
+    except OSError:
+        pass
+    return True
 
 
 def _own_host_key_fingerprint() -> str:

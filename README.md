@@ -168,6 +168,54 @@ A port that is open but whose key is not in the list is still shown,
 by its fingerprint.  That is a dialer whose key was added before
 the records existed.
 
+## The other shape: a web page, not a shell
+
+The tunnel's other use is offering a WEB PAGE from a machine that
+cannot be reached.  The dialer end runs a small http server instead of
+an sshd, and the reachable end's forwarded port lands on it.
+
+```bash
+ljtunnel dialer --listen-host <the reachable end> --user <its account> \
+    --name box-a --http-server --http-directory /path/to/serve
+```
+
+**THERE IS NO SSHD ON THAT END, AND NO SHELL AND NO ACCOUNT.**  The
+token in the URL is what lets somebody in:
+
+```
+http://<the reachable end>:<the forwarded port>/<the token>/
+```
+
+**THE TOKEN IS THE FIRST SEGMENT OF THE PATH**, and it is not the file
+that is served: a request for `/<token>/some/file.html` serves
+`some/file.html`, and the token is only the gate.  So the token is not
+a file name that has to be in every link.
+
+**AND IT IS COMPARED IN CONSTANT TIME**, so the time it takes does not
+say how much of it was guessed right.
+
+**AND THE TOKEN IS KEPT**, in the state directory, so the URL does not
+change every time the dialer is restarted.  `--http-token` gives it
+one by hand; without it a random one is made the first time.
+
+| | |
+|---|---|
+| `--http-server` | serve a directory instead of running an sshd |
+| `--http-directory` | what to serve |
+| `--http-port` | where to listen (default 10001) |
+| `--http-token` | the token, if you want a particular one |
+
+**THE REACHABLE END NAMES IT LIKE ANY OTHER DIALER.**  There is no host
+key behind an http server, so the keyscan finds nothing -- and the
+server says who it is in a header instead:
+
+    X-LJT-Name: box-a
+    X-LJT-Fingerprint: SHA256:...
+
+The fingerprint is of the MACHINE KEY -- the key the dialer logged in
+with -- so the reachable end looks the name up in its own key list, and
+a dialer cannot call itself something it is not.
+
 ## The stale host keys
 
 A person connects to a dialer through a forwarded port, and the ssh

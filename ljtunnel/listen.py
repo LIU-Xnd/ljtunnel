@@ -279,11 +279,13 @@ def add_key(pubkey: str, name: str = "") -> None:
     # caller does not say what it is.
     if not name:
         name = name_of(key)
-    # THE BODY IS THE SECOND TOKEN, and the comment is the third.
-    # The body alone is the key's material and it is what
-    # identifies it.
-    parts = key.split()
-    body = parts[1] if len(parts) >= 2 else key
+    # THE BODY IS FOUND, AND NOT COUNTED.  A key-list line carries the
+    # options first, so the second token of a line with options on it
+    # is the option and not the key type.
+    #
+    # MEASURED: the second token was taken, so a line with an option
+    # on it was matched against the wrong thing.
+    body = _body_of(key)
     for i, line in enumerate(lines):
         # THE BODY AND NOT THE LINE.  A substring match finds the
         # body inside a line that holds something else, and the key
@@ -346,11 +348,8 @@ def set_key_name(pubkey: str, name: str) -> bool:
     key = pubkey.strip()
     if not key:
         return False
-    # THE BODY IS THE SECOND TOKEN of the key, and the comment is the
-    # third.  The body alone is the key's material and it is what
-    # identifies it.
-    parts = key.split()
-    body = parts[1] if len(parts) >= 2 else key
+    # THE BODY IS FOUND, AND NOT COUNTED -- see add_key.
+    body = _body_of(key)
 
     out = []
     changed = False
@@ -391,6 +390,45 @@ def set_key_name(pubkey: str, name: str) -> bool:
 
     sshd.set_authorized_keys(out)
     return changed
+
+def remove_key_text(pubkey: str) -> bool:
+    """Take a key out of the list, by the KEY TEXT.
+
+    `remove_key` takes a FINGERPRINT, because that is what the panel
+    has: the sshd reports the fingerprint and not the text.  But a
+    person, or a test, has the TEXT -- the key they pasted in -- and
+    making them work out the fingerprint first is a step that has no
+    reason to be there.
+
+    So the body is compared, and the body is what identifies the key.
+    """
+    path = paths.authorized_keys()
+    if not os.path.isfile(path):
+        return False
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [l.rstrip() for l in fh if l.strip()]
+
+    # THE BODY, and not the second token: a key-list line carries the
+    # OPTIONS first, so the second token of a line with options on it
+    # is the option and not the key type.
+    #
+    # MEASURED: passing a whole line in took the second token, which
+    # was "ssh-ed25519", and nothing was removed.
+    body = _body_of((pubkey or "").strip())
+    if not body:
+        return False
+
+    out = []
+    removed = False
+    for line in lines:
+        if body and _body_of(line) == body:
+            removed = True
+            continue
+        out.append(line)
+    if removed:
+        sshd.set_authorized_keys(out)
+    return removed
+
 
 def remove_key(fingerprint: str) -> bool:
     """Take a key out of the list, by its FINGERPRINT.

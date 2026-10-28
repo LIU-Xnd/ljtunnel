@@ -161,6 +161,20 @@ def known_hosts() -> str:
     return os.path.join(base, ".ssh", "known_hosts")
 
 
+def http_token() -> str:
+    """The file the http server's token is kept in.
+
+    **THE TOKEN IS KEPT, SO IT DOES NOT CHANGE EVERY TIME.**  A token
+    that changes on every run is a token the person has to fetch again
+    every time, and a URL that works today and not tomorrow is a
+    thing nobody trusts.
+
+    So the token is made once and written down here, and it is read
+    back on the next run.
+    """
+    return os.path.join(state_dir(), "http_token")
+
+
 def pid_file() -> str:
     return os.path.join(state_dir(), "ljtunnel_sshd.pid")
 

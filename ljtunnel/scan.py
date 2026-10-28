@@ -155,6 +155,36 @@ def scan(first_port: int, count: int, timeout: float = 12.0) -> list:
     return out
 
 
+def _http_identity(port: int, host: str = "127.0.0.1",
+                   timeout: float = 6.0) -> tuple:
+    """What an http server on that port says about itself, or ("", "").
+
+    **A PORT BEHIND AN HTTP SERVER HAS NO HOST KEY BEHIND IT**, so the
+    keyscan finds nothing and the panel cannot name the dialer.  So the
+    server says who it is in a header, and the header is read.
+
+    The answer is the name and the fingerprint of the MACHINE KEY, and
+    the fingerprint is the one the reachable end can look up in its own
+    key list -- so a dialer cannot call itself something it is not.
+
+    MEASURED: the http server's own header is `X-LJT-Name` and
+    `X-LJT-Fingerprint`.
+    """
+    import http.client
+
+    try:
+        c = http.client.HTTPConnection(host, port, timeout=timeout)
+        c.request("GET", "/")
+        r = c.getresponse()
+        r.read(1)
+        name = r.getheader("X-LJT-Name") or ""
+        fp = r.getheader("X-LJT-Fingerprint") or ""
+        c.close()
+    except Exception:
+        return ("", "")
+    return (name.strip(), fp.strip())
+
+
 def scan_fast(first_port: int, count: int, timeout: float = 12.0) -> list:
     """The same, but the fingerprints are looked up in PARALLEL.
 
@@ -189,6 +219,7 @@ def scan_fast(first_port: int, count: int, timeout: float = 12.0) -> list:
 
     names = _keys_with_names()
     ports = sorted(listening)
+    http_names = {}
 
     # ---- the ones that are already known ----
     todo = []
@@ -210,6 +241,28 @@ def scan_fast(first_port: int, count: int, timeout: float = 12.0) -> list:
             fps[port] = fp
             _cache[(port, listening[port])] = fp
 
+    # ---- AND A PORT WITH NO HOST KEY BEHIND IT MIGHT BE HTTP ----
+    #
+    # THE HTTP SERVER HAS NO HOST KEY, so the keyscan above finds
+    # nothing and the port would be shown with no name at all.  So the
+    # server is asked, and it says who it is in a header.
+    #
+    # MEASURED: the keyscan on a port with an http server behind it
+    # takes the whole timeout and finds nothing -- so it is only asked
+    # when the keyscan found nothing, and not on every port.
+    todo_http = [p for p in ports if not fps.get(p)]
+    if todo_http:
+        with ThreadPoolExecutor(max_workers=min(8, len(todo_http))) as pool:
+            http_ids = list(pool.map(
+                lambda p: _http_identity(p, "127.0.0.1", timeout=timeout),
+                todo_http))
+        for port, (nm, fp) in zip(todo_http, http_ids):
+            if nm or fp:
+                http_names[port] = nm
+                if fp:
+                    fps[port] = fp
+                    _cache[(port, listening[port])] = fp
+
     # ---- and the ones that are gone are forgotten ----
     live_keys = {(p, listening[p]) for p in ports}
     for key in [k for k in _cache if k not in live_keys]:
@@ -218,7 +271,12 @@ def scan_fast(first_port: int, count: int, timeout: float = 12.0) -> list:
     out = []
     for port in ports:
         fp = fps.get(port, "")
+        # THE NAME IS THE ONE THE KEY LIST KNOWS, and not the one the
+        # server said -- because the key list is this end's own, and a
+        # server that says it is somebody else is not believed.
         name = names.get(fp, "") if fp else ""
+        if not name:
+            name = http_names.get(port, "")
         out.append(Dialer(
             fingerprint=fp,
             name=name,

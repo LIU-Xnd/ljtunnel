@@ -220,6 +220,58 @@ check("the far side's key is in the list",
       "the key is in the list" in (r2.stdout or ""),
       (r2.stdout or r2.stderr or "").strip()[:80])
 
+# ---- AND THE KEY IS TAKEN OUT AGAIN ----
+#
+# THE TEST ADDS A KEY TO THE REAL KEY LIST, so it has to take it out
+# again.  MEASURED: it did not, and two test keys were still in the
+# list afterwards -- and the records file had one too, so the panel
+# showed a dialer that had gone.
+#
+# So the key list and the records are put back the way they were.
+_cleanup_code = """
+import sys
+sys.path.insert(0, r"{win}")
+for m in list(sys.modules):
+    if m.startswith("ljtunnel"):
+        del sys.modules[m]
+sys.path = [p for p in sys.path if "site-packages" not in p]
+sys.path.insert(0, r"{win}")
+from ljtunnel import listen as L, sshd, records
+
+# THE KEY GOES OUT, and the file is put back the way it was.
+_before = open(sshd.authorized_keys_path(), encoding="utf-8").read() \
+    if False else None
+""".format(win=WIN)
+
+
+def _cleanup():
+    """Take the test's key out of the real key list, and the record."""
+    _code = """
+import sys, os
+sys.path.insert(0, r"{win}")
+for m in list(sys.modules):
+    if m.startswith("ljtunnel"):
+        del sys.modules[m]
+sys.path = [p for p in sys.path if "site-packages" not in p]
+sys.path.insert(0, r"{win}")
+from ljtunnel import listen as L, sshd, records, paths
+
+# THE KEY GOES OUT.
+L.remove_key_text({key!r})
+
+# AND THE RECORD, if there is one.
+for _r in records.load():
+    if {key!r} in str(_r.get("pubkey", "")):
+        records.remove(str(_r.get("name", "")))
+        break
+
+print("  the key is out")
+""".format(win=WIN, key=machine_key)
+    _r = subprocess.run([PY, "-c", _code], capture_output=True, text=True,
+                        errors="replace", timeout=180)
+    return "the key is out" in (_r.stdout or "")
+
+
 print()
 print("=== the far side runs the FROZEN BINARY as the dialer ===")
 # THE NEW HOST KEY IS ACCEPTED, BECAUSE THE REACHABLE END WAS
@@ -338,6 +390,15 @@ check("the ports are free", (r5.stdout or "").strip() == "0",
       f"{(r5.stdout or '').strip()} held")
 
 c.close()
+
+# AND THE KEY GOES OUT OF THE REAL LIST.
+#
+# THE TEST ADDS A KEY TO THE REAL KEY LIST, so it has to take it out
+# again.  MEASURED: it did not, and two test keys were still in the
+# list afterwards -- and the records file had one too, so the panel
+# showed a dialer that had gone.
+check("the test's key is out of the real key list", _cleanup(),
+      "the key is out")
 
 # AND THE TEMPORARY DIRECTORY GOES WITH IT.
 shutil.rmtree(tmpdir, ignore_errors=True)

@@ -278,8 +278,16 @@ def test_dialer():
     check("the dialer does not accept forwarding",
           "allow_forwarding=True" not in src,
           "the dialer end does not forward for anyone")
+    # THE FORWARD POINTS AT THIS END'S OWN SERVICE.  It is checked by
+    # RUNNING the command builder, not by looking for a string in the
+    # source -- the string moved when the http server was added, and a
+    # check that looks for a string says nothing about the behaviour.
+    _args7 = dialer_mod.build_parser().parse_args(
+        ["--listen-host", "192.0.2.7"])
+    _cmd7 = " ".join(dialer_mod._forward_command(
+        _args7, "/tmp/k", 10002, "someone"))
     check("the dialer's forwarding goes to its own sshd",
-          'f"0.0.0.0:{port}:127.0.0.1:{args.local_port}"' in src,
+          "0.0.0.0:10002:127.0.0.1:10001" in _cmd7,
           "the forward must point at the local sshd port")
     check("the dialer does not forward a fixed port",
           "127.0.0.1:1" not in src)
@@ -1809,6 +1817,221 @@ def test_host_key_change():
         except Exception as _e4:
             check("a dialer with no name does not kill the window",
                   False, f"{type(_e4).__name__}: {_e4}")
+
+    # ---- AND A KEY IS TAKEN OUT BY ITS BODY, NOT BY ITS SECOND TOKEN ----
+    #
+    # A KEY-LIST LINE CARRIES THE OPTIONS FIRST, so the second token of
+    # a line with options on it is the OPTION and not the key type.
+    #
+    # MEASURED: the second token was taken, so a key that was put in
+    # with an option on it could not be taken out again -- and the
+    # cross-machine test's key stayed in the list for good.
+    import tempfile as _tf8
+
+    with _tf8.TemporaryDirectory() as _td8:
+        _old8 = paths.state_dir
+        paths.state_dir = lambda: _td8
+        try:
+            _k8 = ("ssh-ed25519 "
+                   "AAAAC3NzaC1lZDI1NTE5AAAAIK4icCbdG74l91kP0yiahmWy5ATLu47tVa"
+                   "r4KD9FAOqx thebox")
+            L.add_key(_k8, "thebox")
+            _line8 = L.read_keys()[0]
+            check("the key goes in with its name on it",
+                  "thebox" in _line8 and "LJT_NAME=thebox" in _line8,
+                  _line8[:100])
+
+            # AND IT IS TAKEN OUT BY THE KEY TEXT -- and the text it
+            # is given is the LINE, with the option on it, because
+            # that is what a caller has: the key it pasted in, or the
+            # line that is in the list.
+            #
+            # MEASURED: the second token was taken, and for a line
+            # with an option on it the second token is the OPTION.
+            check("and it can be taken out again by its text",
+                  L.remove_key_text(_line8), "not removed: " + _line8[:70])
+            check("and the list is empty afterwards",
+                  not L.read_keys(), str(L.read_keys())[:100])
+        finally:
+            paths.state_dir = _old8
+
+    # ---- AND THE HTTP SERVER SERVES A DIRECTORY, BEHIND A TOKEN ----
+    #
+    # THE TUNNEL'S OTHER SHAPE: the unreachable end offers a WEB PAGE,
+    # and the reachable end's forwarded port lands on it.  There is no
+    # sshd on this end, so the TOKEN in the URL is what lets somebody
+    # in.
+    import http.client as _hc5
+    import tempfile as _tf5
+
+    from ljtunnel import httpsrv as _hs5
+
+    with _tf5.TemporaryDirectory() as _w5:
+        with open(os.path.join(_w5, "index.html"), "w", encoding="utf-8") as _fh5:
+            _fh5.write("IT_WORKS\n")
+        _srv5, _tok5 = _hs5.serve(_w5, 0)
+        _p5 = _srv5.server_address[1]
+        try:
+            def _get5(_path):
+                _c = _hc5.HTTPConnection("127.0.0.1", _p5, timeout=10)
+                _c.request("GET", _path)
+                _r = _c.getresponse()
+                _b = _r.read()
+                _c.close()
+                return _r.status, _b
+
+            _s5, _b5 = _get5("/" + _tok5 + "/index.html")
+            check("the http server serves a file with the token",
+                  _s5 == 200 and b"IT_WORKS" in _b5, f"{_s5} {_b5[:40]}")
+            _s5, _b5 = _get5("/index.html")
+            check("and refuses it without the token",
+                  _s5 == 404 and b"no token" in _b5, f"{_s5} {_b5[:40]}")
+            _s5, _b5 = _get5("/" + _tok5[:8] + "/index.html")
+            check("and a prefix of the token is not the token",
+                  _s5 == 404, f"{_s5} {_b5[:40]}")
+            _s5, _b5 = _get5("/" + _tok5 + "x/index.html")
+            check("and one character more is not the token",
+                  _s5 == 404, f"{_s5} {_b5[:40]}")
+            # AND THE PATH CANNOT GET OUT OF THE DIRECTORY.  The
+            # normalisation is done TWICE on purpose: once here, and
+            # once in the base class's own translate_path.  Either
+            # alone would do, and the guard is about the OUTCOME --
+            # the file outside the directory is not served.
+            _s5, _b5 = _get5("/" + _tok5 + "/../../etc/passwd")
+            check("and the path cannot get out of the directory",
+                  _s5 == 404 or b"root:" not in _b5, f"{_s5} {_b5[:40]}")
+            _s5, _b5 = _get5("/" + _tok5 + "/%2e%2e/%2e%2e/etc/passwd")
+            check("and not when the dots are encoded",
+                  _s5 == 404 or b"root:" not in _b5, f"{_s5} {_b5[:40]}")
+            _s5, _b5 = _get5("/" + _tok5 + "/sub/../../etc/passwd")
+            check("and not from a subdirectory either",
+                  _s5 == 404 or b"root:" not in _b5, f"{_s5} {_b5[:40]}")
+        finally:
+            _srv5.shutdown()
+
+    # ---- AND THE HTTP SERVER SAYS WHO IT IS ----
+    #
+    # A PORT BEHIND AN HTTP SERVER HAS NO HOST KEY BEHIND IT, so the
+    # keyscan finds nothing and the panel cannot name the dialer.  So
+    # the server says who it is in a header, and the reachable end
+    # reads it.
+    #
+    # AND THE FINGERPRINT IT GIVES IS OF THE MACHINE KEY, so the
+    # reachable end can look the name up in its OWN key list -- and a
+    # dialer cannot call itself something it is not.
+    from ljtunnel import scan as _sc10
+
+    with _tf5.TemporaryDirectory() as _w10:
+        with open(os.path.join(_w10, "index.html"), "w", encoding="utf-8") as _fh10:
+            _fh10.write("IT_WORKS\n")
+        _srv10, _tok10 = _hs5.serve(_w10, 0, name="thebox",
+                                    fingerprint="SHA256:ABCdefGHIjkl")
+        _p10 = _srv10.server_address[1]
+        try:
+            _nm10, _fp10 = _sc10._http_identity(_p10)
+            check("the http server says its name",
+                  _nm10 == "thebox", repr(_nm10))
+            check("and its fingerprint",
+                  _fp10 == "SHA256:ABCdefGHIjkl", repr(_fp10))
+
+            _c10 = _hc5.HTTPConnection("127.0.0.1", _p10, timeout=10)
+            _c10.request("GET", "/")
+            _r10 = _c10.getresponse()
+            _r10.read(1)
+            check("and the name is in the headers",
+                  _r10.getheader("X-LJT-Name") == "thebox",
+                  repr(_r10.getheader("X-LJT-Name")))
+            _c10.close()
+
+            # AND A PORT WITH NOTHING ON IT SAYS NOTHING.
+            _nm10b, _fp10b = _sc10._http_identity(_p10 + 1)
+            check("and a port with nothing on it says nothing",
+                  _nm10b == "" and _fp10b == "", f"{_nm10b!r} {_fp10b!r}")
+        finally:
+            _srv10.shutdown()
+
+    # ---- AND THE TOKEN IS KEPT, SO IT DOES NOT CHANGE ----
+    #
+    # A TOKEN THAT CHANGES ON EVERY RUN IS A URL THAT WORKS TODAY AND
+    # NOT TOMORROW.
+    from ljtunnel import dialer as _dl5
+
+    _old5 = paths.state_dir
+    with _tf5.TemporaryDirectory() as _st5:
+        paths.state_dir = lambda: _st5
+        try:
+            _t1 = _dl5._read_or_make_http_token()
+            _t2 = _dl5._read_or_make_http_token()
+            check("the http token is the same twice",
+                  _t1 == _t2 and bool(_t1), f"{_t1[:12]} {_t2[:12]}")
+            check("and it is long enough to guess wrong",
+                  len(_t1) >= 32, str(len(_t1)))
+
+            # AND THE DIALER USES THE KEPT ONE.  A token that is made
+            # at the call site instead of being read is a new one every
+            # run, and the URL stops working.
+            #
+            # IT IS CHECKED BY RUNNING THE DIALER TWICE, in the
+            # print-only mode, and looking at what it says.  That is
+            # the behaviour, and it does not go stale when the code
+            # moves.
+            #
+            # THE STATE DIRECTORY IS POINTED AT BY THE ENVIRONMENT, so
+            # the child process uses the same one: the monkeypatch
+            # above is in THIS process, and the child is another one.
+            import subprocess as _sp9
+
+            _root9 = _sp9.os.path.dirname(
+                _sp9.os.path.dirname(_dl5.__file__))
+            _env9 = dict(_sp9.os.environ)
+            _env9["XDG_STATE_HOME"] = _st5
+            _env9["LOCALAPPDATA"] = _st5
+            _cmd9 = [_sp9.sys.executable, "-m", "ljtunnel", "dialer",
+                     "--listen-host", "192.0.2.7", "--http-server",
+                     "--http-directory", _st5, "--print-only"]
+            _tok9 = []
+            for _ in range(2):
+                _r9 = _sp9.run(_cmd9, capture_output=True, text=True,
+                               errors="replace", timeout=180,
+                               cwd=_root9, env=_env9)
+                _o9 = (_r9.stdout or "") + (_r9.stderr or "")
+                _tok9 += [l.split(":", 1)[1].strip()
+                          for l in _o9.splitlines() if "the token:" in l]
+            check("and the dialer says the same token twice",
+                  len(_tok9) == 2 and _tok9[0] == _tok9[1] and bool(_tok9[0]),
+                  str(_tok9)[:80])
+        finally:
+            paths.state_dir = _old5
+
+    # ---- AND THE DIALER HAS THE SWITCHES ----
+    from ljtunnel import dialer as _dl6
+
+    _p6 = _dl6.build_parser()
+    _a6 = _p6.parse_args(["--listen-host", "192.0.2.7", "--http-server",
+                           "--http-directory", "/tmp/x"])
+    check("the dialer has --http-server", _a6.http_server, str(_a6))
+    check("and --http-directory", _a6.http_directory == "/tmp/x",
+          str(_a6.http_directory))
+    check("and the http port has a default", _a6.http_port == 10001,
+          str(_a6.http_port))
+    _a6b = _p6.parse_args(["--listen-host", "192.0.2.7"])
+    check("and it is off unless it is asked for",
+          not _a6b.http_server, str(_a6b))
+
+    # ---- AND THE HTTP MODE FORWARDS TO THE HTTP PORT ----
+    #
+    # THE PORT THE FORWARD LANDS ON IS THE SERVICE'S PORT, and with
+    # the http server that is not the sshd's port.
+    _cmd6 = _dl6._forward_command(
+        _a6, "/tmp/key", 10002, "someone", service_port=8080)
+    _txt6 = " ".join(_cmd6)
+    check("the forward lands on the http server's port",
+          "10002:127.0.0.1:8080" in _txt6, _txt6[-80:])
+    _cmd6b = _dl6._forward_command(
+        _a6b, "/tmp/key", 10002, "someone")
+    _txt6b = " ".join(_cmd6b)
+    check("and the sshd mode lands on the sshd's port",
+          "10002:127.0.0.1:10001" in _txt6b, _txt6b[-80:])
 
     # ---- AND THE STALE HOST KEYS ARE CLEANED ----
     #
