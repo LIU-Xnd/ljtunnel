@@ -30,17 +30,46 @@ SKIP = {"__pycache__", ".git", ".appdist-build", "appdist", "build",
 
 
 def files(local_root):
-    """Every file in the tree, as (relative posix path, full path)."""
+    r"""Every file in the tree, as (relative posix path, full path).
+
+    **A DEVICE NAME IS NOT A FILE.**  NUL is a device on Windows, and
+    a `> NUL` in a shell leaves an entry with that name that cannot
+    be deleted and cannot be walked past.
+
+    MEASURED: the walk hit it and said
+
+        ValueError: path is on mount '\\.\NUL', start on mount 'D:'
+
+    and the whole sync stopped.  So the names that are device names
+    are skipped, and the walk carries on.
+    """
     out = []
     for base, dirs, names in os.walk(local_root):
-        dirs[:] = [d for d in dirs if d not in SKIP]
+        dirs[:] = [d for d in dirs if d not in SKIP and not _is_device(d)]
         for name in names:
             if name.endswith((".pyc", ".pyo")):
                 continue
+            if _is_device(name):
+                continue
             full = os.path.join(base, name)
-            rel = os.path.relpath(full, local_root).replace("\\", "/")
+            try:
+                rel = os.path.relpath(full, local_root).replace("\\", "/")
+            except ValueError:
+                # a path on another mount, so it is not ours to send
+                continue
             out.append((rel, full))
     return out
+
+
+# THE NAMES THAT ARE DEVICES AND NOT FILES.
+_DEVICES = {"NUL", "CON", "PRN", "AUX", "COM1", "COM2", "COM3", "COM4",
+            "LPT1", "LPT2", "LPT3"}
+
+
+def _is_device(name: str) -> bool:
+    """Whether this name is a Windows device and not a file."""
+    base = name.split(".")[0].upper()
+    return base in _DEVICES
 
 
 def main(argv=None) -> int:
