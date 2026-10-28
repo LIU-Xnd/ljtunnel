@@ -261,6 +261,19 @@ class Registry:
             d.alive = d.port in live
             if not d.alive:
                 continue
+            # AND THE THING ON THE PORT MUST BE AN SSHD.
+            #
+            # MEASURED: a dialer that had gone left its lines in the
+            # log, and its PORT was taken by something else -- an
+            # http.server on 10010 -- and the panel said the dialer was
+            # up.  It was not.  The log says who ASKED for the port,
+            # and only the banner says what is ON it now.
+            #
+            # So the banner is asked for, and a port without an SSH
+            # banner on it is not a dialer.
+            if not self._is_sshd(d.port):
+                d.alive = False
+                continue
             if d.port in claimed:
                 # Two sessions asked for the SAME port, and only one of
                 # them got it: the second was told "forward success"
@@ -281,6 +294,19 @@ class Registry:
             out.append(d)
         out.sort(key=lambda d: d.port)
         return out
+
+    def _is_sshd(self, port: int) -> bool:
+        """Whether an SSH server is on that port right now.
+
+        THE BANNER IS THE TEST.  An SSH server says "SSH-2.0-..." as
+        the first thing it sends, before any key exchange, so a plain
+        socket can ask.
+        """
+        try:
+            banner = banner_of(port, timeout=3.0)
+        except Exception:
+            return False
+        return banner.startswith("SSH-")
 
     def ports_in_use(self) -> set:
         """The ports that are taken, from the socket table."""

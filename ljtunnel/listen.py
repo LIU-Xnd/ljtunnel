@@ -60,7 +60,7 @@ import subprocess
 import sys
 import time
 
-from . import detect, paths, records, sshd
+from . import detect, paths, quiet, records, sshd
 
 # The port this end's own sshd listens on. The dialers log in here.
 LISTEN_SSHD_PORT = 10001
@@ -436,6 +436,74 @@ def remove_key(fingerprint: str) -> bool:
     return removed
 
 
+def clean_known_hosts(first_port: int = FIRST_FORWARD_PORT,
+                      last_port: int = LAST_FORWARD_PORT,
+                      hosts: tuple = ("localhost", "127.0.0.1")) -> list:
+    """Take this end's memory of the tunnel's host keys away.
+
+    WHY IT IS NEEDED
+    ----------------
+    A person connects to a dialer through a forwarded port, and the
+    ssh CLIENT remembers the host key it saw there.  The memory is
+    in the user's own known_hosts.
+
+    And a dialer that is set up again makes a NEW host key -- the
+    machine key is the host key, and a fresh install is a fresh key.
+    So the memory goes stale and the ssh client says
+
+        Host key for [localhost]:10002 has changed and you have
+        requested strict checking.
+        Host key verification failed.
+
+    which is the ssh client being RIGHT: the key really did change.
+    But the dialer is the same box being set up again, and the
+    person cannot be asked to type a command to fix it.
+
+    SO THE ENTRIES ARE CLEANED WHEN THE TUNNEL STARTS.
+
+    HOW IT IS DONE
+    --------------
+    **BY ASKING SSH.**  The file is in the HASHED form, so a line
+    cannot be found by reading it and looking for the address -- and
+    `ssh-keygen -F` knows the hash.  And `ssh-keygen -R` is what
+    takes it out, because ssh wrote it and ssh knows how to remove
+    it.
+
+    MEASURED: on a copy, `ssh-keygen -R "[localhost]:10002"` removed
+    that entry and left the other one alone.
+
+    **AND ONLY THE TUNNEL'S OWN ENTRIES.**  The file is the user's,
+    and it holds every host they have ever connected to.  So only
+    the tunnel's ports are touched, and only for the names the tunnel
+    is reached by.
+    """
+    import subprocess
+
+    kh = paths.known_hosts()
+    if not os.path.isfile(kh):
+        return []
+
+    removed = []
+    for host in hosts:
+        for port in range(first_port, last_port + 1):
+            for target in (f"[{host}]:{port}", host):
+                try:
+                    # THE SYSTEM'S ssh-keygen, and not the one on the
+                    # PATH: on this machine the PATH has git's copy,
+                    # and the system's is the one that goes with the
+                    # ssh the person is using.
+                    r = quiet.run_hidden(
+                        [sshd.ssh_keygen_path(), "-R", target, "-f", kh],
+                        capture_output=True, text=True,
+                        errors="replace", timeout=30)
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if r.returncode == 0 and "updated" in (r.stdout or ""):
+                    if target not in removed:
+                        removed.append(target)
+    return removed
+
+
 def read_keys() -> list:
     path = paths.authorized_keys()
     if not os.path.isfile(path):
@@ -656,6 +724,25 @@ def main(argv=None) -> int:
     sshd.set_authorized_keys(read_keys())
 
     listener = Listener()
+
+    # THE STALE HOST KEYS GO, BEFORE THE TUNNEL COMES UP.
+    #
+    # A dialer that is set up again makes a new host key, and the ssh
+    # client remembers the old one, and then it says
+    #
+    #     Host key for [localhost]:10002 has changed and you have
+    #     requested strict checking.
+    #
+    # and the person cannot get in.  So the tunnel's own entries are
+    # cleaned every time it starts.
+    try:
+        _gone = clean_known_hosts(LISTEN_SSHD_PORT,
+                                  listener.first_port + listener.count - 1)
+        if _gone:
+            log(f"  the known hosts were cleaned: {len(_gone)} entries")
+    except Exception:
+        pass
+
     srv = listener.start()
     time.sleep(1.5)
     if srv.poll() is not None:

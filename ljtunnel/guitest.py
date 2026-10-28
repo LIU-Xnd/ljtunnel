@@ -112,6 +112,60 @@ def run() -> int:
     check("the panel shows the address",
           a.addr_var.get() not in ("", "127.0.0.1"), a.addr_var.get())
 
+    # -- the known hosts button --------------------------------------
+    #
+    # A DIALER THAT IS SET UP AGAIN MAKES A NEW HOST KEY, and the ssh
+    # client remembers the old one, and then it says
+    #
+    #     Host key for [localhost]:10002 has changed and you have
+    #     requested strict checking.
+    #
+    # So the window has a button that takes the tunnel's own entries
+    # away, and it does not touch the person's own hosts.
+    import os as _os5
+    import tempfile as _tf5
+
+    with _tf5.TemporaryDirectory() as _tmp5:
+        _kh5 = _os5.path.join(_tmp5, "known_hosts")
+        with open(_kh5, "w", encoding="utf-8") as _fh5:
+            _fh5.write("[localhost]:10002 ssh-ed25519 AAAAfake1 nobody\n")
+            _fh5.write("[example.com]:22 ssh-ed25519 AAAAfake3 somebody\n")
+
+        _old5 = paths.known_hosts
+        paths.known_hosts = lambda: _kh5
+        try:
+            # THE BUTTON IS INVOKED, not the method called: an invoke()
+            # is what a click does, and it goes through the same event
+            # path.
+            _found5 = None
+            _all5 = []
+
+            def _walk5(w):
+                for _c in w.winfo_children():
+                    _all5.append(_c)
+                    _walk5(_c)
+
+            _walk5(a)
+            for _c in _all5:
+                try:
+                    if _c.cget("text") == "Clean the known hosts":
+                        _found5 = _c
+                except Exception:
+                    pass
+            check("the window has the button", _found5 is not None,
+                  "not found")
+            if _found5 is not None:
+                _found5.invoke()
+                a.update()
+            _after5 = open(_kh5, encoding="utf-8").read()
+        finally:
+            paths.known_hosts = _old5
+
+        check("and the button takes the tunnel's own entry away",
+              "[localhost]:10002" not in _after5, _after5[:90])
+        check("and leaves the person's own host alone",
+              "[example.com]:22" in _after5, _after5[:90])
+
     # -- the panel starts empty ------------------------------------
     check("the panel starts empty", len(a.tree.get_children()) == 0,
           str(a.tree.get_children()))
@@ -126,6 +180,29 @@ def run() -> int:
     s.bind(("127.0.0.1", 0))
     s.listen(1)
     port = s.getsockname()[1]
+
+    # THE SOCKET SAYS THE SSH BANNER, because the detector asks for
+    # it now: a dialer that has gone leaves its lines in the log, and
+    # its PORT is taken by something else, and the panel said the
+    # dialer was up when it was not.
+    import threading as _th6
+
+    def _say6(conn):
+        try:
+            conn.sendall(b"SSH-2.0-OpenSSH_9.6 TestFixture\r\n")
+        except OSError:
+            pass
+
+    def _banner_loop6():
+        while True:
+            try:
+                s.settimeout(0.5)
+                conn, _ = s.accept()
+            except (socket.timeout, OSError):
+                continue
+            _th6.Thread(target=_say6, args=(conn,), daemon=True).start()
+
+    _th6.Thread(target=_banner_loop6, daemon=True).start()
 
     reg = a.listener.registry
     reg.first_port = port

@@ -210,8 +210,10 @@ class App(tk.Tk):
 
         row = ttk.Frame(outer)
         row.pack(fill="x", pady=(pad, 0))
+        ttk.Button(row, text="Clean the known hosts",
+                   command=self._clean_known_hosts).pack(side="left")
         ttk.Button(row, text="Copy the access key path",
-                   command=self._copy_access_path).pack(side="left")
+                   command=self._copy_access_path).pack(side="left", padx=6)
         ttk.Button(row, text="Be an administrator",
                    command=self._ask_to_be_admin)
         ttk.Button(row, text="Open the firewall",
@@ -235,6 +237,8 @@ class App(tk.Tk):
                     self._started(payload)
                 elif kind == "error":
                     self._failed(payload)
+                elif kind == "cleaned":
+                    self._append(f"the known hosts were cleaned: {payload} entries")
                 elif kind == "log":
                     self._append(payload)
                 elif kind == "firewall":
@@ -322,6 +326,24 @@ class App(tk.Tk):
             sshd.ensure_host_key()
             sshd.ensure_client_key()
             sshd.set_authorized_keys(L.read_keys())
+            # THE STALE HOST KEYS GO, BEFORE THE TUNNEL COMES UP.
+            #
+            # A dialer that is set up again makes a new host key, and
+            # the ssh client remembers the old one, and then it says
+            #
+            #     Host key for [localhost]:10002 has changed and you
+            #     have requested strict checking.
+            #
+            # and the person cannot get in.  So the tunnel's own
+            # entries are cleaned every time it starts.
+            try:
+                _gone = L.clean_known_hosts(
+                    L.LISTEN_SSHD_PORT,
+                    self.listener.first_port + self.listener.count - 1)
+                if _gone:
+                    self.events.put(("cleaned", len(_gone)))
+            except Exception:
+                pass
             self.srv = self.listener.start()
             time.sleep(1.5)
             if self.srv.poll() is not None:
@@ -478,12 +500,21 @@ class App(tk.Tk):
         # the dialers that are up, by name
         live = {}
         for d in list(self._scan_rows):
-            live[d.name or d.fingerprint] = d
+            # THE NAME, OR THE FINGERPRINT, OR SOMETHING.
+            #
+            # MEASURED: a dialer whose key list line carries no name
+            # gave an EMPTY id, and the tree said "Item  already
+            # exists" and the window died.  An id must not be empty.
+            live[d.name or d.fingerprint or f"port {d.port}"] = d
 
         # the records first: a record is a row whether or not its
         # dialer is here
         for rec in records.load():
-            name = rec.get("name") or rec.get("pubkey", "")[:24]
+            # AN IID MUST NOT BE EMPTY.  MEASURED: a record with no
+            # name and no key gave the tree an empty id, and the tree
+            # said "Item  already exists" and the window died.
+            name = (rec.get("name") or rec.get("pubkey", "")[:24]
+                    or f"record {len(want)}")
             d = live.pop(name, None)
             self._records[name] = rec
             want[name] = (
@@ -503,6 +534,9 @@ class App(tk.Tk):
         for iid in self.tree.get_children():
             if iid not in want:
                 self.tree.delete(iid)
+        # THE IDS THAT GO IN, so the delete above and the insert below
+        # are talking about the same thing.
+        want = dict(want)
         for iid, values in want.items():
             if iid in have:
                 if have[iid] != values:
@@ -534,6 +568,37 @@ class App(tk.Tk):
         self._append("end's key list -- paste it in the field above.")
         self._append("  " + sshd.public_key_of(sshd.ensure_client_key()))
         self._append("  (in " + paths.authorized_keys() + ")")
+
+    def _clean_known_hosts(self):
+        """Take this end's memory of the tunnel's host keys away.
+
+        A person connects to a dialer through a forwarded port, and
+        the ssh CLIENT remembers the host key it saw there.  A dialer
+        that is set up again makes a new host key, so the memory goes
+        stale and the ssh client says
+
+            Host key for [localhost]:10002 has changed and you have
+            requested strict checking.
+
+        MEASURED: that is the message, and the person cannot be asked
+        to type a command to fix it.  So the entries for the tunnel's
+        ports are cleaned -- here, and when the tunnel starts.
+        """
+        # THE WHOLE RANGE, THE SSHD'S OWN PORT INCLUDED: it is
+        # 10001-10021, and the sshd's own port is 10001.
+        removed = L.clean_known_hosts(
+            L.LISTEN_SSHD_PORT,
+            self.listener.first_port + self.listener.count - 1)
+        if removed:
+            self._append(f"the known hosts were cleaned: "
+                         f"{len(removed)} entr{'y' if len(removed) == 1 else 'ies'}")
+            for r in removed[:8]:
+                self._append(f"  {r}")
+            if len(removed) > 8:
+                self._append(f"  ... and {len(removed) - 8} more")
+        else:
+            self._append("there was nothing in the known hosts to clean")
+        self._refresh()
 
     def _copy_access_path(self):
         """Where the end user's private key is.

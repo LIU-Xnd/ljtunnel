@@ -135,6 +135,32 @@ def access_key() -> str:
     return os.path.join(state_dir(), "id_rsa_ljtunnel_access")
 
 
+def known_hosts() -> str:
+    """The ssh client's memory of the host keys it has seen.
+
+    THIS IS THE USER'S OWN FILE, and not the tunnel's.  A person who
+    connects to a dialer through a forwarded port goes through the
+    ssh CLIENT, and the client remembers the host key it saw -- in
+    the user's own known_hosts.
+
+    And that memory goes STALE: a dialer that is set up again makes
+    a new host key, and the old one is remembered, and the ssh client
+    then says
+
+        Host key for [localhost]:10002 has changed and you have
+        requested strict checking.
+
+    which is the ssh client being RIGHT and being unhelpful at the
+    same time.  So the entries for the tunnel's ports are cleaned
+    when the tunnel starts.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("HOME") or os.path.expanduser("~")
+    return os.path.join(base, ".ssh", "known_hosts")
+
+
 def pid_file() -> str:
     return os.path.join(state_dir(), "ljtunnel_sshd.pid")
 

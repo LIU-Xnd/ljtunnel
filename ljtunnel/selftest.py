@@ -786,12 +786,39 @@ def test_detect_live():
     """The detector, against the socket table, with a real port."""
     from ljtunnel import detect
 
-    # a port that is really open, and one that is not
+    # A PORT THAT IS REALLY OPEN, AND ONE THAT IS NOT.
+    #
+    # AND IT SAYS THE SSH BANNER, because that is what the detector
+    # asks now: a dialer that has gone leaves its lines in the log,
+    # and its PORT is taken by something else -- MEASURED: an
+    # http.server on 10010 -- and the panel said the dialer was up.
+    # It was not.  So the thing on the port has to be an sshd.
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("127.0.0.1", 0))
     s.listen(1)
     port = s.getsockname()[1]
+
+    # the banner, said by the socket
+    def _say_banner(conn):
+        try:
+            conn.sendall(b"SSH-2.0-OpenSSH_9.6 TestFixture\r\n")
+        except OSError:
+            pass
+
+    import threading as _th3
+    _stop3 = False
+
+    def _banner_loop():
+        while not _stop3:
+            try:
+                s.settimeout(0.5)
+                conn, _ = s.accept()
+            except (socket.timeout, OSError):
+                continue
+            _th3.Thread(target=_say_banner, args=(conn,), daemon=True).start()
+
+    _th3.Thread(target=_banner_loop, daemon=True).start()
     try:
         live = detect._listening(port, port)
         check("a port that is listening is found", port in live,
@@ -809,6 +836,34 @@ def test_detect_live():
         check("the name is on it",
               any(x.port == port and x.name == "box-a" for x in snap),
               str([(x.port, x.name) for x in snap]))
+
+        # ---- a port that is NOT an sshd is not a dialer ----
+        #
+        # MEASURED: a dialer that had gone left its lines in the log,
+        # and its PORT was taken by something else -- an http.server on
+        # 10010 -- and the panel said the dialer was up.  It was not.
+        #
+        # So the thing on the port has to be an sshd, and the banner is
+        # how you ask.
+        _plain = socket.socket()
+        _plain.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        _plain.bind(("127.0.0.1", 0))
+        _plain.listen(1)
+        _pport = _plain.getsockname()[1]
+        try:
+            _reg4 = detect.Registry(first_port=_pport, count=1)
+            _reg4.learn([_LOG_KEY_OPTION, _LOG_ACCEPT, _LOG_FORWARD])
+            if _FP_A in _reg4._seen:
+                _reg4._seen[_FP_A].port = _pport
+            _snap4 = _reg4.snapshot()
+            check("a port with something else on it is not a dialer",
+                  not any(x.port == _pport for x in _snap4),
+                  str([(x.port, x.name) for x in _snap4]))
+            check("and the banner is what tells them apart",
+                  detect.banner_of(_pport, timeout=3.0) == "",
+                  repr(detect.banner_of(_pport, timeout=3.0)))
+        finally:
+            _plain.close()
 
         # ---- one port has one owner ----
         #
@@ -832,6 +887,7 @@ def test_detect_live():
               len([x for x in snap3 if x.port == port]) == 1,
               str([(x.port, x.name) for x in snap3]))
     finally:
+        _stop3 = True
         # The socket is closed LAST: a closed port is not listening,
         # and the check above needs it to be.
         s.close()
@@ -1682,6 +1738,90 @@ def test_host_key_change():
                   _line2.rstrip().endswith("thenewname"), _line2[-40:])
         finally:
             paths.state_dir = _old3
+
+    # ---- AND THE PANEL'S IDS ARE NEVER EMPTY ----
+    #
+    # TKINTER DOES NOT TAKE AN EMPTY ID, and it says
+    #
+    #     Item  already exists
+    #
+    # and the window dies.  MEASURED: a dialer whose key list line
+    # carried no name gave an empty id, and that is how it was found.
+    #
+    # THE TEST IS THE REAL THING: a window, and a dialer with no name
+    # and no fingerprint -- and the window has to still be there
+    # afterwards.
+    try:
+        from ljtunnel import app as _app4
+
+        _w4 = _app4.App()
+        try:
+            # NO NAME AND NO FINGERPRINT: the id has to come from
+            # somewhere else, or Tkinter says "Item  already exists"
+            # and the window dies.
+            _d4 = detect.Dialer(fingerprint="", name="", port=10010,
+                                peer="192.0.2.7")
+            _w4._scan_rows = [_d4]
+            _w4._refresh()
+            _kids4 = list(_w4.tree.get_children())
+            check("a dialer with no name does not kill the window",
+                  len(_kids4) == 1, str(_kids4))
+            check("and it gets an id that is not empty",
+                  bool(_kids4) and bool(_kids4[0]), str(_kids4))
+            check("and the id says what it is",
+                  bool(_kids4) and ("10010" in _kids4[0] or
+                                    "?" in _kids4[0]), str(_kids4))
+        finally:
+            _w4.destroy()
+    except Exception as _e4:
+        check("a dialer with no name does not kill the window",
+              False, f"{type(_e4).__name__}: {_e4}")
+
+    # ---- AND THE STALE HOST KEYS ARE CLEANED ----
+    #
+    # A DIALER THAT IS SET UP AGAIN MAKES A NEW HOST KEY, and the ssh
+    # client remembers the old one, and then it says
+    #
+    #     Host key for [localhost]:10002 has changed and you have
+    #     requested strict checking.
+    #
+    # and the person cannot get in.  So the tunnel's own entries are
+    # cleaned when the tunnel starts, and with a button.
+    import tempfile as _tf4
+
+    with _tf4.TemporaryDirectory() as _tmp4:
+        _kh = os.path.join(_tmp4, "known_hosts")
+        # THREE LINES: two of the tunnel's, and one that is not.
+        with open(_kh, "w", encoding="utf-8") as _fh:
+            _fh.write("[localhost]:10001 ssh-ed25519 AAAAfake0 nobody\n")
+            _fh.write("[localhost]:10002 ssh-ed25519 AAAAfake1 nobody\n")
+            _fh.write("[127.0.0.1]:10005 ssh-ed25519 AAAAfake2 nobody\n")
+            _fh.write("[localhost]:10021 ssh-ed25519 AAAAfake4 nobody\n")
+            _fh.write("[localhost]:10022 ssh-ed25519 AAAAfake5 nobody\n")
+            _fh.write("[example.com]:22 ssh-ed25519 AAAAfake3 somebody\n")
+
+        _old4 = paths.known_hosts
+        paths.known_hosts = lambda: _kh
+        try:
+            _gone = L.clean_known_hosts(L.LISTEN_SSHD_PORT, 10021)
+            _after = open(_kh, encoding="utf-8").read()
+        finally:
+            paths.known_hosts = _old4
+
+        check("the tunnel's own entries are cleaned",
+              "[localhost]:10002" not in _after, _after[:90])
+        check("and the other one of its ports too",
+              "[127.0.0.1]:10005" not in _after, _after[:90])
+        check("and the sshd's own port",
+              "[localhost]:10001" not in _after, _after[:90])
+        check("and the last one of the range",
+              "[localhost]:10021" not in _after, _after[:90])
+        check("but the port past the range is left alone",
+              "[localhost]:10022" in _after, _after[:90])
+        check("and so is the person's own host",
+              "[example.com]:22" in _after, _after[:90])
+        check("and it says what it took",
+              len(_gone) >= 1, str(_gone)[:90])
 
     # ---- AND THE ACCOUNT IS FOUND WITHOUT THE ENVIRONMENT ----
     #

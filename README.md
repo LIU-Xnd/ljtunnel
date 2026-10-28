@@ -168,6 +168,35 @@ A port that is open but whose key is not in the list is still shown,
 by its fingerprint.  That is a dialer whose key was added before
 the records existed.
 
+## The stale host keys
+
+A person connects to a dialer through a forwarded port, and the ssh
+client remembers the host key it saw there.  That memory is in the
+user's own `known_hosts`.
+
+**And a dialer that is set up again makes a new host key** -- the
+machine key is the host key, and a fresh install is a fresh key.  So
+the memory goes stale and the ssh client says:
+
+```
+Host key for [localhost]:10002 has changed and you have requested strict checking.
+Host key verification failed.
+```
+
+The ssh client is right: the key really did change.  But the dialer is
+the same box being set up again, and the person cannot be asked to type
+a command to fix it.
+
+**So the tunnel's own entries are cleaned, every time it starts.**  The
+window has a **Clean the known hosts** button for it as well.
+
+Only the tunnel's ports are touched, and only for the names the tunnel
+is reached by: `localhost` and `127.0.0.1`, ports `10001` to `10021`.
+**The rest of the `known_hosts` is left alone** -- it holds every host
+the person has ever connected to.
+
+The entries are removed by `ssh-keygen -R`, which is what wrote them.
+
 ## The keys
 
 Two identities, two relationships:
@@ -251,6 +280,14 @@ powershell -ExecutionPolicy Bypass -File tools/open_firewall.ps1
 from a terminal running as administrator.
 
 ## Commands
+
+| what | how |
+|---|---|
+| the window | `ljtunnel listen` |
+| the command a new dialer runs | the **Show the command** button |
+| take the stale host keys away | the **Clean the known hosts** button |
+
+
 
 ```
 ljtunnel listen      the reachable end -- the window on Windows
