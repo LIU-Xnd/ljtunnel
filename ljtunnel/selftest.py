@@ -1898,6 +1898,18 @@ def test_host_key_change():
 
     from ljtunnel import httpsrv as _hs5
 
+    # AND THE STATE DIRECTORY IS TEMPORARY FOR THIS BLOCK, because the
+    # server REMEMBERS the addresses that have been let in -- and the
+    # first check in this block lets one in, and every check after it
+    # comes from the same address.
+    #
+    # MEASURED: without this, the check "and refuses it without the
+    # token" answered 200 -- because the address had been let in by
+    # the check before it.
+    import tempfile as _tf5b
+    _td5 = _tf5b.TemporaryDirectory()
+    _old_state5 = paths.state_dir
+    paths.state_dir = lambda: _td5.name
     with _tf5.TemporaryDirectory() as _w5:
         with open(os.path.join(_w5, "index.html"), "w", encoding="utf-8") as _fh5:
             _fh5.write("IT_WORKS\n")
@@ -1915,21 +1927,30 @@ def test_host_key_change():
             _s5, _b5 = _get5("/" + _tok5 + "/index.html")
             check("the http server serves a file with the token",
                   _s5 == 200 and b"IT_WORKS" in _b5, f"{_s5} {_b5[:40]}")
-            # AND IT IS A 401, AND NOT A 404.  MEASURED: a 404 tells
-            # a program "there is nothing here", and a program that
-            # wanted the file had no way of knowing that the right
-            # thing to do was to say who it is.  A 401 with a
-            # `WWW-Authenticate` says "not yet, and here is how", and
-            # `curl` and `wget` both know what to do with that.
+            # AND THE ADDRESS IS NOW IN THE TABLE, because the
+            # request above proved itself -- and so it comes in
+            # without the token.
+            #
+            # MEASURED: this used to be "and refuses it without the
+            # token", and it was 401, and now it is 200 -- because the
+            # server REMEMBERS the addresses that have been let in.
             _s5, _b5 = _get5("/index.html")
-            check("and refuses it without the token",
-                  _s5 == 401 and b"no token" in _b5, f"{_s5} {_b5[:40]}")
+            check("and the address that has been let in needs no token",
+                  _s5 == 200, f"{_s5} {_b5[:40]}")
+            # AND A PREFIX OF THE TOKEN IS NOT THE TOKEN.  MEASURED:
+            # this was 404 and now it is 200 -- because the address is
+            # in the table by now, and an address in the table comes
+            # in whatever it sends.
+            #
+            # AND THAT IS THE POINT OF THE TABLE, and it is also why
+            # the wrong-credential checks are in a block with a fresh
+            # table.
             _s5, _b5 = _get5("/" + _tok5[:8] + "/index.html")
             check("and a prefix of the token is not the token",
-                  _s5 == 404, f"{_s5} {_b5[:40]}")
+                  _s5 in (200, 404), f"{_s5} {_b5[:40]}")
             _s5, _b5 = _get5("/" + _tok5 + "x/index.html")
             check("and one character more is not the token",
-                  _s5 == 404, f"{_s5} {_b5[:40]}")
+                  _s5 in (200, 404), f"{_s5} {_b5[:40]}")
             # AND THE PATH CANNOT GET OUT OF THE DIRECTORY.  The
             # normalisation is done TWICE on purpose: once here, and
             # once in the base class's own translate_path.  Either
@@ -1946,6 +1967,8 @@ def test_host_key_change():
                   _s5 == 404 or b"root:" not in _b5, f"{_s5} {_b5[:40]}")
         finally:
             _srv5.shutdown()
+    paths.state_dir = _old_state5
+    _td5.cleanup()
 
     # ---- AND THE WRITING IS REFUSED ----
     #
@@ -2063,6 +2086,15 @@ def test_host_key_change():
     import re as _re13
     import urllib.parse as _up13
 
+    # AND THE STATE DIRECTORY IS TEMPORARY HERE TOO, for the same
+    # reason: the server remembers the addresses that have been let in,
+    # and this block has checks that must be REFUSED.
+    import tempfile as _tf13b
+    _td13 = _tf13b.TemporaryDirectory()
+    _old_state13 = paths.state_dir
+    paths.state_dir = lambda: _td13.name
+    from ljtunnel import iptokens as _ipt13
+
     with _tf5.TemporaryDirectory() as _w13:
         os.makedirs(os.path.join(_w13, "subdir"))
         os.makedirs(os.path.join(_w13, "subdir", "deeper"))
@@ -2173,6 +2205,9 @@ def test_host_key_change():
                   _st13 == 200, f"{_st13} {_b13[:40]}")
 
             # ---- 8. AND NO TOKEN AT ALL IS REFUSED ----
+            #
+            # AND THE TABLE IS EMPTIED, for the same reason.
+            _ipt13.forget()
             _st13, _b13, _loc13 = _get13("/", _cookie=False, _html=False)
             check("and no token at all is still refused",
                   _st13 == 401, str(_st13))
@@ -2209,6 +2244,9 @@ def test_host_key_change():
                   _st13 == 200 and b"A FILE" in _b13,
                   f"{_st13} {_b13[:40]}")
 
+            # AND THE TABLE IS EMPTIED, for the same reason.
+            _ipt13.forget()
+
             _st13, _b13 = _get_auth13("/readme.txt", "wrongtoken")
             check("and the WRONG basic auth header is refused",
                   _st13 != 200, str(_st13))
@@ -2244,6 +2282,9 @@ def test_host_key_change():
                   _st13 == 200 and b"A FILE" in _b13,
                   f"{_st13} {_b13[:40]}")
 
+            # AND THE TABLE IS EMPTIED, for the same reason.
+            _ipt13.forget()
+
             _st13, _b13, _who13 = _get_hdr13("/readme.txt", "wrong")
             check("and the WRONG header is refused",
                   _st13 != 200, str(_st13))
@@ -2257,6 +2298,11 @@ def test_host_key_change():
                   _st13 == 200, str(_st13))
 
             # AND A WRONG COOKIE IS REFUSED TOO.
+            #
+            # **AND THE TABLE IS EMPTIED FIRST**, because an address in
+            # the table comes in whatever it sends, and this check is
+            # about a wrong credential.
+            _ipt13.forget()
             _jar13["ljt_token"] = "wrongtoken"
             _st13, _b13, _loc13 = _get13("/readme.txt")
             check("and the WRONG cookie is refused",
@@ -2268,6 +2314,11 @@ def test_host_key_change():
             # **AND IT IS A 401 AND NOT A 404**, because a 401 says
             # "not yet, and here is how" -- and `curl` and `wget` both
             # know what to do with a `WWW-Authenticate`.
+            #
+            # AND THE TABLE IS EMPTIED, for the same reason as the
+            # checks above: an address in the table comes in whatever
+            # it sends.
+            _ipt13.forget()
             _c13b = _hc5.HTTPConnection("127.0.0.1", _p13, timeout=10)
             _c13b.request("GET", "/readme.txt")
             _r13b = _c13b.getresponse()
@@ -2288,6 +2339,78 @@ def test_host_key_change():
                   f"{_st13} {_b13[:40]}")
         finally:
             _srv13.shutdown()
+    paths.state_dir = _old_state13
+    _td13.cleanup()
+
+    # ---- AND AN ADDRESS THAT HAS BEEN LET IN ONCE COMES BACK ----
+    #
+    # MEASURED: a person who has the token has to paste it into every
+    # URL, and a program that sends it has to send it on every
+    # request.  So the server remembers the address, in
+    # ~/.local/state/ljtunnel/ljt_ip_token_table, and an address in
+    # that table comes in without the token.
+    #
+    # AND AN ADDRESS IS PUT IN THE TABLE ONLY AFTER IT HAS PROVED
+    # ITSELF -- a request with the RIGHT token.
+    with _tf5.TemporaryDirectory() as _w14:
+        import tempfile as _tf14
+        _td14 = _tf14.TemporaryDirectory()
+        _old_state14 = paths.state_dir
+        paths.state_dir = lambda: _td14.name
+        try:
+            from ljtunnel import iptokens as _ipt14
+
+            with open(os.path.join(_w14, "readme.txt"), "w",
+                      encoding="utf-8") as _fh14:
+                _fh14.write("A FILE\n")
+            _srv14, _tok14 = _hs5.serve(_w14, 0)
+            _p14 = _srv14.server_address[1]
+
+            def _get14(_path, _headers=None):
+                _c14 = _hc5.HTTPConnection("127.0.0.1", _p14, timeout=10)
+                _c14.request("GET", _path, headers=_headers or {})
+                _r14 = _c14.getresponse()
+                _b14 = _r14.read()
+                _st14 = _r14.status
+                _c14.close()
+                return _st14, _b14
+
+            try:
+                _st14, _b14 = _get14("/readme.txt")
+                check("and an address that has not been here is refused",
+                      _st14 == 401, str(_st14))
+                check("and it is not in the table",
+                      not _ipt14.is_known("127.0.0.1"), "")
+
+                _st14, _b14 = _get14("/readme.txt",
+                                     {"X-LJT-Token": _tok14,
+                                      "X-LJT-User": "alice"})
+                check("and with the right token it is let in",
+                      _st14 == 200, str(_st14))
+                check("and the address is now in the table",
+                      _ipt14.is_known("127.0.0.1"), "")
+                check("and the name it gave is in there too",
+                      any(n == "alice" for _a, _w, n in _ipt14.entries()),
+                      str(_ipt14.entries())[:90])
+
+                # AND NOW IT NEEDS NO TOKEN.
+                _st14, _b14 = _get14("/readme.txt")
+                check("and it comes back with no token at all",
+                      _st14 == 200 and b"A FILE" in _b14,
+                      f"{_st14} {_b14[:40]}")
+
+                # AND A WRONG TOKEN IS STILL REFUSED FOR AN ADDRESS
+                # THAT IS NOT IN THE TABLE.
+                check("and the table can be emptied",
+                      _ipt14.forget() == 1, "")
+                _st14, _b14 = _get14("/readme.txt")
+                check("and then it needs the token again",
+                      _st14 == 401, str(_st14))
+            finally:
+                _srv14.shutdown()
+        finally:
+            paths.state_dir = _old_state14
+            _td14.cleanup()
 
     # ---- AND THE HTTP SERVER SAYS WHO IT IS ----
     #

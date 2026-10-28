@@ -73,6 +73,8 @@ import sys
 import threading
 import urllib.parse
 
+from . import iptokens
+
 
 # THE NAME OF THE COOKIE THE TOKEN IS IN.
 #
@@ -181,6 +183,26 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         in constant time, and there is no path through the handler
         that skips the comparison.
         """
+        # 0. THE ADDRESS THAT HAS BEEN LET IN ONCE.
+        #
+        # **AND IT DOES NOT NEED THE TOKEN AGAIN.**  MEASURED: a
+        # person who has the token has to paste it into every URL,
+        # and a program that sends it has to send it on every
+        # request, and the secret stops being a thing that is used
+        # once and becomes a thing that is used all the time.
+        #
+        # So the server REMEMBERS the address, in
+        #
+        #     ~/.local/state/ljtunnel/ljt_ip_token_table
+        #
+        # and an address in that table comes in without the token.
+        #
+        # **AND THE TOKEN IS STILL THE GATE FOR EVERY ADDRESS THAT IS
+        # NOT IN THE TABLE**, and an address is put in the table only
+        # after a request with the RIGHT token has come from it.
+        if self._known_address():
+            return True
+
         # 1. THE COOKIE.
         #
         # **AND IT IS COMPARED AGAINST THE TOKEN.**  MEASURED: the
@@ -188,6 +210,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         # true of the basic auth header -- and ANY of them was let in.
         _cookie = self._cookie_token()
         if _cookie and hmac.compare_digest(_cookie, self.token):
+            self._remember_address()
             return True
 
         # 2. THE BASIC AUTH HEADER.
@@ -214,6 +237,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         # name was let in.
         _basic = self._basic_token()
         if _basic and hmac.compare_digest(_basic, self.token):
+            self._remember_address()
             return True
 
         # 3. THE HEADER OF OUR OWN.
@@ -225,6 +249,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         # way in.
         _header = self.headers.get(TOKEN_HEADER, "").strip()
         if _header and hmac.compare_digest(_header, self.token):
+            self._remember_address()
             return True
 
         parsed = urllib.parse.urlparse(self.path)
@@ -233,14 +258,56 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         q = urllib.parse.parse_qs(parsed.query)
         for value in q.get("token", []):
             if hmac.compare_digest(value, self.token):
+                self._remember_address()
                 return True
 
         # 5. THE PATH.
         first = parsed.path.lstrip("/").split("/", 1)[0]
         if first and hmac.compare_digest(first, self.token):
+            self._remember_address()
             return True
 
         return False
+
+    def _client_address(self) -> str:
+        """The address this request came from.
+
+        **AND IT IS THE PEER'S ADDRESS AND NOT THE ONE IN A HEADER.**
+        MEASURED: `X-Forwarded-For` is a header the client sends, and
+        a client that sends it could put any address in it -- and
+        then it would be remembered as that address and would come in
+        without a token.  So the header is not read.
+        """
+        try:
+            return self.client_address[0] or ""
+        except (AttributeError, IndexError, TypeError):
+            return ""
+
+    def _known_address(self) -> bool:
+        """Whether this address is in the table.
+
+        **AND A FAILURE TO READ THE TABLE IS NOT A YES.**  The table
+        is on the disk and it can fail to be read, and a server that
+        says "yes" when it does not know would let everybody in.
+        """
+        try:
+            return iptokens.is_known(self._client_address())
+        except Exception:
+            return False
+
+    def _remember_address(self) -> None:
+        """Put this address in the table, now that it has proved itself.
+
+        **AND A FAILURE TO WRITE IT IS NOT FATAL.**  The request is
+        good -- the token was right -- and the person should not be
+        told no because the disk said no.
+        """
+        try:
+            iptokens.remember(self._client_address(),
+                              (self.headers.get(NAME_HEADER, "") or
+                               "").strip()[:200])
+        except Exception:
+            pass
 
     def _wants_html(self) -> bool:
         """Whether this client is a browser that can hold a cookie.

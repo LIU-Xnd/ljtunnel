@@ -253,6 +253,28 @@ say how much of it was guessed right.
 change every time the dialer is restarted.  `--http-token` gives it
 one by hand; without it a random one is made the first time.
 
+**AND AN ADDRESS THAT HAS BEEN LET IN ONCE DOES NOT NEED THE TOKEN
+AGAIN.**  The server remembers where it was let in from:
+
+```
+~/.local/state/ljtunnel/ljt_ip_token_table
+```
+
+**AND AN ADDRESS IS PUT IN THE TABLE ONLY AFTER IT HAS PROVED
+ITSELF** -- a request with the right token has to come from it first.
+A new address still has to have the token.
+
+**AND THE TABLE IS PRIVATE**, because it says which addresses do not
+need a secret.
+
+**AND IT CAN BE LOOKED AT AND EMPTIED:**
+
+```bash
+ljtunnel ips                # who is in it
+ljtunnel ips forget         # take them all out
+ljtunnel ips forget <the address>   # take one out
+```
+
 | | |
 |---|---|
 | `--http-server` | serve a directory instead of running an sshd |

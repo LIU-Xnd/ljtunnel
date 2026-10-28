@@ -18,6 +18,7 @@ them warns.
 from __future__ import annotations
 
 import sys
+import time
 
 
 USAGE = """\
@@ -32,6 +33,8 @@ commands:
   key        print this end's public key, for the other end's key list
   forget     remove this end's configuration: the keys, the records,
              the config and the log
+  ips        show the addresses that have been let in without a token,
+             and take them out again
 
 run 'ljtunnel <command> --help' for a command's own options.
 """
@@ -84,6 +87,44 @@ def _run_key(argv):
     paths.ensure_dir(paths.state_dir())
     key = sshd.ensure_client_key()
     print(sshd.public_key_of(key))
+    return 0
+
+
+def _run_ips(argv) -> int:
+    """Show the addresses that have been let in, or forget them.
+
+    **THE TABLE IS THE ADDRESSES THAT DO NOT NEED A TOKEN.**  It says
+    who is in, and a person who does not want that any more asks for
+    it to be taken out.
+    """
+    from . import iptokens
+
+    if argv and argv[0] in ("-h", "--help"):
+        print("usage: ljtunnel ips\n\n"
+              "  show the addresses that have been let in without a token\n"
+              "  forget -- take every one of them out\n"
+              "  forget <the address> -- take one of them out")
+        return 0
+
+    if argv and argv[0] == "forget":
+        address = argv[1] if len(argv) > 1 else ""
+        n = iptokens.forget(address)
+        if address:
+            print(f"  {n} address taken out"
+                  + ("" if n else " -- it was not in the table"))
+        else:
+            print(f"  {n} address(es) taken out")
+        return 0
+
+    rows = iptokens.entries()
+    if not rows:
+        print("  nobody has been let in yet")
+        return 0
+    print(f"  the addresses that do not need a token ({len(rows)}):")
+    for addr, when, name in rows:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S",
+                               time.localtime(when)) if when else "?"
+        print(f"    {addr:<40} {stamp}  {name}")
     return 0
 
 
@@ -222,6 +263,8 @@ def main(argv=None) -> int:
         run = _run_key
     elif command == "forget":
         from .forget import main as run
+    elif command == "ips":
+        run = _run_ips
     else:
         print(f"ljtunnel: unknown command {command!r}\n", file=sys.stderr)
         print(USAGE.format(version=__version__), end="", file=sys.stderr)

@@ -175,6 +175,22 @@ def http_token() -> str:
     return os.path.join(state_dir(), "http_token")
 
 
+def ip_token_table() -> str:
+    """Where the table of the addresses that have been let in is kept.
+
+    **THE TABLE IS IN THE STATE DIRECTORY, AND NOT IN THE SERVED
+    DIRECTORY.**  A file in the served directory is a file the people
+    who reach the server can read, and this table says which
+    addresses are let in without a token -- so it is not theirs.
+
+    **AND IT IS PRIVATE**, because it says who does not need a token.
+
+    Linux:   ~/.local/state/ljtunnel/ljt_ip_token_table
+    Windows: %LOCALAPPDATA%/ljtunnel/ljt_ip_token_table
+    """
+    return os.path.join(state_dir(), "ljt_ip_token_table")
+
+
 def pid_file() -> str:
     return os.path.join(state_dir(), "ljtunnel_sshd.pid")
 
