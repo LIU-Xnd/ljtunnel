@@ -2115,6 +2115,26 @@ def test_host_key_change():
     _p6 = _dl6.build_parser()
     _a6 = _p6.parse_args(["--listen-host", "192.0.2.7", "--http-server",
                            "--http-directory", "/tmp/x"])
+    # ---- AND THE PURE FORWARD ----
+    #
+    # **SOMETHING IS ALREADY BEING SERVED ON THE OTHER END.**  The
+    # person runs `rclone serve webdav` there, and the tunnel lands on
+    # it as it is -- no sshd, no http server, nothing started.
+    #
+    # AND IT IS NOT THE SAME AS --http-server: that one starts the
+    # serving, and this one does not.
+    _a20 = _p6.parse_args(["--listen-host", "192.0.2.7", "--forward-only",
+                           "--local-port", "12345"])
+    check("the dialer has --forward-only", _a20.forward_only, str(_a20))
+    check("and it keeps the port that is already being served",
+          _a20.local_port == 12345, str(_a20.local_port))
+    check("and it does not start the http server",
+          not _a20.http_server, str(_a20))
+    check("and the two are not both asked for",
+          _p6.parse_args(["--listen-host", "192.0.2.7",
+                           "--forward-only", "--http-server"]).forward_only,
+          "both were accepted")
+
     check("the dialer has --http-server", _a6.http_server, str(_a6))
     check("and --http-directory", _a6.http_directory == "/tmp/x",
           str(_a6.http_directory))

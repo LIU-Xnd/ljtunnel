@@ -218,6 +218,31 @@ webdav` on the far side and forward its port instead:
 rclone serve webdav /path/to/serve --addr 127.0.0.1:10001
 ```
 
+## The third shape: forward a port that is already being served
+
+`--http-server` starts the serving.  `--forward-only` does not: the
+port is **already** being served on the far side, by something else,
+and the tunnel lands on it as it is.
+
+```bash
+# on the far side, already running:
+rclone serve webdav /path/to/serve --addr 127.0.0.1:10001
+
+# on the far side, the tunnel:
+ljtunnel dialer --listen-host <the reachable end> --user <its account> \
+    --name box-a --forward-only --local-port 10001
+```
+
+**NOTHING IS STARTED ON THAT END.**  No sshd, no http server, no key
+list, no account.  The tunnel is a pipe and the port is the other
+end of it.
+
+**AND THE PORT CHECK IS WEAKER HERE, AND IT SAYS SO.**  With an sshd
+on the far side the host key behind the forwarded port is the
+dialer's own, and it is compared -- a real check.  Here there is no
+sshd, so there is no key of ours behind the port: the client is
+taken at its word and the port is checked for being open.
+
 ## The stale host keys
 
 A person connects to a dialer through a forwarded port, and the ssh

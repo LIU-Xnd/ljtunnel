@@ -109,6 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="accept the reachable end's host key even if it "
                         "is not the one this end remembers -- use it "
                         "after the reachable end has been reinstalled")
+    p.add_argument("--forward-only", action="store_true",
+                   help="forward a port that is already being served on "
+                        "this end, and start nothing here. Use it for "
+                        "something like 'rclone serve webdav' that is "
+                        "already running: the tunnel lands on it as it "
+                        "is, and there is no sshd and no http server on "
+                        "this end")
     p.add_argument("--http-server", action="store_true",
                    help="serve a directory over http instead of running an "
                         "sshd here: the forwarded port lands on this end's "
@@ -152,7 +159,22 @@ def main(argv=None) -> int:
     # The token is made HERE, before anything is started, so the log
     # can print the URL and the person can use it.
     http_token = ""
-    service_port = args.http_port if args.http_server else args.local_port
+    # AND THE PORT THE FORWARD GOES TO.
+    #
+    # THREE SHAPES, AND THEY ARE NOT COMPATIBLE:
+    #
+    #   --http-server   this end serves the files, on --http-port
+    #   --forward-only  this end serves NOTHING: the port is already
+    #                   taken by something else and the tunnel lands
+    #                   on it as it is
+    #   (neither)       this end runs an sshd, on --local-port
+    service_port = (args.http_port if args.http_server
+                    else args.local_port)
+    if args.forward_only and args.http_server:
+        log("--forward-only and --http-server are not both needed: "
+            "--forward-only forwards a port that is already being "
+            "served, and --http-server starts the serving.")
+        return 2
     if args.http_server:
         if not args.http_directory:
             log("--http-server needs --http-directory")
@@ -177,6 +199,12 @@ def main(argv=None) -> int:
     if args.http_server:
         log(f"    this end's http   : 127.0.0.1:{service_port}")
         log(f"    serving           : {args.http_directory}")
+    elif args.forward_only:
+        # AND NOTHING IS STARTED HERE.  The port is already being
+        # served by something -- `rclone serve webdav`, or anything
+        # else -- and the tunnel lands on it as it is.
+        log(f"    this end's port   : 127.0.0.1:{service_port}")
+        log("    this end starts NOTHING: the port is already served")
     else:
         log(f"    this end's sshd   : 127.0.0.1:{service_port}")
     log("")
@@ -195,7 +223,7 @@ def main(argv=None) -> int:
     # perfectly good key, because the name was the REACHABLE END's
     # and not this end's.  So the name has to be THIS end's.
     local_account = (args.local_user or "").strip() or current_user()
-    if not local_account:
+    if not local_account and not args.forward_only:
         log("cannot tell who the user is; pass --local-user")
         return 2
 
@@ -205,7 +233,9 @@ def main(argv=None) -> int:
     #
     # AND THE HTTP SERVER DOES NOT NEED IT: the token in the URL is
     # what lets somebody in, and there is no sshd to check a key.
-    if args.access_key and not args.http_server:
+    # AND WITH --forward-only THERE IS NO SSHD HERE, so there is no
+    # key list to put a key in and no account to name.
+    if args.access_key and not args.http_server and not args.forward_only:
         add_key(args.access_key)
 
     # The machine key: this end's identity to the listen end.
@@ -236,6 +266,12 @@ def main(argv=None) -> int:
         log(f"    on port: {args.http_port}")
         log(f"    the token: {http_token}")
         log("    READ ONLY: it serves files and nothing else.")
+        log("")
+    elif args.forward_only:
+        # NOTHING TO SET UP HERE.  There is no sshd, so there is no
+        # key list and no account; whatever is on the port answers.
+        log("  this end serves the port itself: nothing is started here,")
+        log("  and nothing is asked of anybody.")
         log("")
     else:
         # The key list this end's sshd accepts: the end user's key.
@@ -287,6 +323,15 @@ def main(argv=None) -> int:
         log("")
         log("  the URL, once the tunnel is up:")
         log(f"    http://{args.listen_host}:{ports[0]}/{http_token}/")
+        log("")
+    elif args.forward_only:
+        # NOTHING IS STARTED HERE, AND THAT IS THE POINT.
+        #
+        # The port is already being served -- `rclone serve webdav`,
+        # or whatever else the person runs -- and the tunnel lands on
+        # it as it is.  So there is no sshd to start, no key list to
+        # keep, and no account to name.
+        log("  starting nothing: the port is already being served.")
         log("")
     else:
         srv = _start_sshd(args, key, local_account)
@@ -347,7 +392,7 @@ def main(argv=None) -> int:
             log("  because the host key is the one thing in this")
             log("  protocol that cannot be faked.")
             _kill(srv)
-            if not args.http_server:
+            if not args.http_server and not args.forward_only:
                 sshd.stop()
             return 1
 
@@ -397,7 +442,17 @@ def main(argv=None) -> int:
         # So with the http server the client's word is taken, and the
         # port is checked for being OPEN instead -- which is a weaker
         # check, and it is honest about it.
-        if args.http_server:
+        if args.http_server or args.forward_only:
+            # AND THE CHECK IS THAT THE PORT IS OPEN, and not that the
+            # HOST KEY BEHIND IT IS OURS.
+            #
+            # MEASURED: with an sshd on this end the host key behind
+            # the forwarded port IS this end's, and comparing it is a
+            # real check.  But here there is no sshd -- whatever is on
+            # the port is somebody else's program, and there is no key
+            # of ours behind it.  So the client's word is taken and the
+            # port is checked for being OPEN, which is a weaker check,
+            # and it is honest about it.
             if _port_is_open(args.listen_host, port):
                 got = port
                 log(f"  yes: port {port} is forwarding to this end")
@@ -423,7 +478,7 @@ def main(argv=None) -> int:
         log(f"  no port in {ports[0]}-{ports[-1]} could be taken.")
         log("  The reachable end may already have that many dialers.")
         _kill(srv)
-        if not args.http_server:
+        if not args.http_server and not args.forward_only:
             sshd.stop()
         return 1
 
@@ -450,7 +505,7 @@ def main(argv=None) -> int:
     finally:
         _kill(fwd)
         _kill(srv)
-        if not args.http_server:
+        if not args.http_server and not args.forward_only:
             sshd.stop()
         if http_srv is not None:
             try:
