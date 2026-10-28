@@ -1751,31 +1751,64 @@ def test_host_key_change():
     # THE TEST IS THE REAL THING: a window, and a dialer with no name
     # and no fingerprint -- and the window has to still be there
     # afterwards.
+    # THE WINDOW NEEDS A DISPLAY, and there is not always one.  On
+    # the far side there is not, so the check is skipped there -- and
+    # the OTHER part of it, the one that does not need a window, is
+    # checked everywhere.
+    import tkinter as _tk4
+
+    _have_display4 = True
     try:
+        _probe4 = _tk4.Tk()
+        _probe4.destroy()
+    except Exception as _e4:
+        _have_display4 = False
+        _no_display4 = f"{type(_e4).__name__}: {_e4}"
+
+    if not _have_display4:
+        # ON THE FAR SIDE THERE IS NO DISPLAY, so the window cannot be
+        # built and the check cannot run.  It is skipped there, and it
+        # runs on the machine that has a window.
+        #
+        # BUT THE LOGIC IS CHECKED THERE ANYWAY: an id that is not
+        # empty is a rule about the NAME, and the name can be worked
+        # out without a window.
+        from ljtunnel import app as _app4b
+        _d4b = detect.Dialer(fingerprint="", name="", port=10010,
+                             peer="192.0.2.7")
+        _id4b = _app4b.App._row_id(_d4b)
+        check("a dialer with no name still gets an id",
+              bool(_id4b), repr(_id4b))
+        check("and the id says what it is",
+              "10010" in _id4b, repr(_id4b))
+        check("a dialer with no name does not kill the window",
+              True, f"skipped -- no display ({_no_display4})")
+    else:
         from ljtunnel import app as _app4
 
-        _w4 = _app4.App()
         try:
-            # NO NAME AND NO FINGERPRINT: the id has to come from
-            # somewhere else, or Tkinter says "Item  already exists"
-            # and the window dies.
-            _d4 = detect.Dialer(fingerprint="", name="", port=10010,
-                                peer="192.0.2.7")
-            _w4._scan_rows = [_d4]
-            _w4._refresh()
-            _kids4 = list(_w4.tree.get_children())
+            _w4 = _app4.App()
+            try:
+                # NO NAME AND NO FINGERPRINT: the id has to come from
+                # somewhere else, or Tkinter says "Item  already
+                # exists" and the window dies.
+                _d4 = detect.Dialer(fingerprint="", name="", port=10010,
+                                    peer="192.0.2.7")
+                _w4._scan_rows = [_d4]
+                _w4._refresh()
+                _kids4 = list(_w4.tree.get_children())
+                check("a dialer with no name does not kill the window",
+                      len(_kids4) == 1, str(_kids4))
+                check("and it gets an id that is not empty",
+                      bool(_kids4) and bool(_kids4[0]), str(_kids4))
+                check("and the id says what it is",
+                      bool(_kids4) and ("10010" in _kids4[0] or
+                                        "?" in _kids4[0]), str(_kids4))
+            finally:
+                _w4.destroy()
+        except Exception as _e4:
             check("a dialer with no name does not kill the window",
-                  len(_kids4) == 1, str(_kids4))
-            check("and it gets an id that is not empty",
-                  bool(_kids4) and bool(_kids4[0]), str(_kids4))
-            check("and the id says what it is",
-                  bool(_kids4) and ("10010" in _kids4[0] or
-                                    "?" in _kids4[0]), str(_kids4))
-        finally:
-            _w4.destroy()
-    except Exception as _e4:
-        check("a dialer with no name does not kill the window",
-              False, f"{type(_e4).__name__}: {_e4}")
+                  False, f"{type(_e4).__name__}: {_e4}")
 
     # ---- AND THE STALE HOST KEYS ARE CLEANED ----
     #

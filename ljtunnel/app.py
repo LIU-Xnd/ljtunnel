@@ -485,6 +485,19 @@ class App(tk.Tk):
         self._append(f"  {cmd}")
         self._append("  (copied -- paste it on the dialer machine)")
 
+    @staticmethod
+    def _row_id(d) -> str:
+        """The id a dialer gets in the panel.
+
+        **AN ID MUST NOT BE EMPTY.**  Tkinter says "Item  already
+        exists" and the window dies.
+
+        MEASURED: a dialer whose key list line carried no name, and
+        whose fingerprint was not known either, gave an empty id --
+        and that is how the bug was found.
+        """
+        return d.name or d.fingerprint or f"port {d.port}"
+
     def _refresh(self):
         """Redraw the panel: the records, and the dialers that are up.
 
@@ -500,12 +513,7 @@ class App(tk.Tk):
         # the dialers that are up, by name
         live = {}
         for d in list(self._scan_rows):
-            # THE NAME, OR THE FINGERPRINT, OR SOMETHING.
-            #
-            # MEASURED: a dialer whose key list line carries no name
-            # gave an EMPTY id, and the tree said "Item  already
-            # exists" and the window died.  An id must not be empty.
-            live[d.name or d.fingerprint or f"port {d.port}"] = d
+            live[self._row_id(d)] = d
 
         # the records first: a record is a row whether or not its
         # dialer is here
