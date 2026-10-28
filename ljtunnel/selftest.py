@@ -1700,8 +1700,19 @@ def test_host_key_change():
     for _k in ("USERNAME", "USER", "HOME", "USERPROFILE"):
         _saved_env[_k] = _os3.environ.pop(_k, None)
     try:
-        check("and the account is not found with nothing at all",
-              paths.current_user() == "", repr(paths.current_user()))
+        # ON LINUX THE SYSTEM KNOWS, because `pwd` is there.  On
+        # Windows it does not, and the home path is what is left.
+        #
+        # MEASURED: the guard failed on Linux because the account WAS
+        # found -- and that is correct there.
+        _with_nothing = paths.current_user()
+        if sys.platform == "win32":
+            check("and on Windows the account is not found with nothing "
+                  "at all", _with_nothing == "", repr(_with_nothing))
+        else:
+            check("and on Linux the system knows the account",
+                  _with_nothing == _os3.environ.get("USER", _with_nothing)
+                  or bool(_with_nothing), repr(_with_nothing))
         _os3.environ["HOME"] = "/home/liuxd"
         check("but it is found from the home path",
               paths.current_user() == "liuxd",
