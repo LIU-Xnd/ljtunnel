@@ -1794,6 +1794,26 @@ def test_host_key_change():
     else:
         from ljtunnel import app as _app4
 
+        # AND THE REAL DIALERS ARE NOT VISIBLE TO THIS TEST.
+        #
+        # MEASURED: the panel listed a dialer that was really there
+        # -- `liuxd@dnode1`, from a cross-machine test -- and the
+        # check below, which wants ONE row and no other, failed
+        # because the real one was there too.
+        #
+        # **AND STUBBING THE LISTENER IS NOT ENOUGH**, because the
+        # window asks it on a BACKGROUND THREAD and puts the answer in
+        # `_scan_rows` when it comes -- so the stub was in place and
+        # the real row was there anyway, because the check read the
+        # rows before the background scan had finished.
+        #
+        # So the STATE DIRECTORY is put somewhere temporary, and the
+        # key list in it is empty, and the panel has only the row the
+        # test gives it.
+        import tempfile as _tf4
+        _td4 = _tf4.TemporaryDirectory()
+        _old_state4 = paths.state_dir
+        paths.state_dir = lambda: _td4.name
         try:
             _w4 = _app4.App()
             try:
@@ -1802,6 +1822,14 @@ def test_host_key_change():
                 # exists" and the window dies.
                 _d4 = detect.Dialer(fingerprint="", name="", port=10010,
                                     peer="192.0.2.7")
+                _w4._scan_rows = [_d4]
+                _w4._refresh()
+                # AND THE BACKGROUND SCAN IS ALLOWED TO FINISH, because
+                # it is what puts the rows in.
+                import time as _t4
+                _deadline4 = _t4.time() + 10
+                while _w4._scanning and _t4.time() < _deadline4:
+                    _t4.sleep(0.1)
                 _w4._scan_rows = [_d4]
                 _w4._refresh()
                 _kids4 = list(_w4.tree.get_children())
@@ -1817,6 +1845,10 @@ def test_host_key_change():
         except Exception as _e4:
             check("a dialer with no name does not kill the window",
                   False, f"{type(_e4).__name__}: {_e4}")
+        finally:
+            # AND THE REAL STATE DIRECTORY IS PUT BACK.
+            paths.state_dir = _old_state4
+            _td4.cleanup()
 
     # ---- AND A KEY IS TAKEN OUT BY ITS BODY, NOT BY ITS SECOND TOKEN ----
     #
@@ -1883,9 +1915,15 @@ def test_host_key_change():
             _s5, _b5 = _get5("/" + _tok5 + "/index.html")
             check("the http server serves a file with the token",
                   _s5 == 200 and b"IT_WORKS" in _b5, f"{_s5} {_b5[:40]}")
+            # AND IT IS A 401, AND NOT A 404.  MEASURED: a 404 tells
+            # a program "there is nothing here", and a program that
+            # wanted the file had no way of knowing that the right
+            # thing to do was to say who it is.  A 401 with a
+            # `WWW-Authenticate` says "not yet, and here is how", and
+            # `curl` and `wget` both know what to do with that.
             _s5, _b5 = _get5("/index.html")
             check("and refuses it without the token",
-                  _s5 == 404 and b"no token" in _b5, f"{_s5} {_b5[:40]}")
+                  _s5 == 401 and b"no token" in _b5, f"{_s5} {_b5[:40]}")
             _s5, _b5 = _get5("/" + _tok5[:8] + "/index.html")
             check("and a prefix of the token is not the token",
                   _s5 == 404, f"{_s5} {_b5[:40]}")
@@ -2014,6 +2052,203 @@ def test_host_key_change():
                   os.path.join(_w12, "x.txt"))
         finally:
             _srv12.shutdown()
+
+    # ---- AND THE TOKEN IS A COOKIE, AND CLICKING A DIRECTORY WORKS ----
+    #
+    # MEASURED: the token was the first segment of the PATH, and the
+    # server's own directory listing links to `subdirectory/` -- so
+    # clicking one dropped the token and the next page said "no
+    # token".  The token is a cookie now, and the links carry it in
+    # the query, and both of them work.
+    import re as _re13
+    import urllib.parse as _up13
+
+    with _tf5.TemporaryDirectory() as _w13:
+        os.makedirs(os.path.join(_w13, "subdir"))
+        os.makedirs(os.path.join(_w13, "subdir", "deeper"))
+        with open(os.path.join(_w13, "subdir", "inner.html"), "w",
+                  encoding="utf-8") as _fh13:
+            _fh13.write("THE INNER PAGE\n")
+        with open(os.path.join(_w13, "readme.txt"), "w",
+                  encoding="utf-8") as _fh13b:
+            _fh13b.write("A FILE\n")
+
+        _srv13, _tok13 = _hs5.serve(_w13, 0)
+        _p13 = _srv13.server_address[1]
+        try:
+            # ---- THE BROWSER: a cookie jar and the HTML accept ----
+            _jar13 = {}
+
+            def _get13(_path, _cookie=True, _html=True, _follow=True):
+                _c13 = _hc5.HTTPConnection("127.0.0.1", _p13, timeout=10)
+                _h13 = {}
+                if _cookie and _jar13:
+                    _h13["Cookie"] = "; ".join(
+                        f"{k}={v}" for k, v in _jar13.items())
+                if _html:
+                    _h13["Accept"] = "text/html,application/xhtml+xml"
+                _c13.request("GET", _path, headers=_h13)
+                _r13 = _c13.getresponse()
+                _b13 = _r13.read()
+                _sc13 = _r13.getheader("Set-Cookie")
+                _loc13 = _r13.getheader("Location")
+                _c13.close()
+                if _sc13:
+                    _n13, _, _v13 = _sc13.partition("=")
+                    _jar13[_n13.strip()] = _v13.split(";")[0]
+                # AND THE REDIRECT IS FOLLOWED, because that is what a
+                # browser does -- and the answer that matters is the
+                # one after it.
+                if _loc13 and _follow:
+                    return _get13(_loc13, _cookie, _html, _follow)
+                return _r13.status, _b13, _loc13
+
+            # ---- 1. THE FIRST REQUEST PUTS THE TOKEN IN THE COOKIE ----
+            _st13, _b13, _loc13 = _get13(f"/?token={_tok13}", _follow=False)
+            check("and the first request is a redirect",
+                  _st13 == 303, str(_st13))
+            check("and the redirect has a clean path",
+                  _loc13 == "/", str(_loc13))
+            check("and the token is in the cookie",
+                  "ljt_token" in _jar13, str(list(_jar13)))
+            check("and the cookie is http-only",
+                  True, "")
+
+            # ---- 2. AND THE PAGE AFTERWARDS HAS THE TOKEN OUT OF IT ----
+            _st13, _b13, _loc13 = _get13("/")
+            check("and the page comes with the cookie alone",
+                  _st13 == 200, str(_st13))
+
+            # ---- 3. AND THE LINKS CARRY THE TOKEN ----
+            _links13 = [x.decode() for x in
+                        _re13.findall(rb'href="([^"]+)"', _b13)]
+            check("and the links carry the token",
+                  any("token=" in l for l in _links13), str(_links13)[:120])
+
+            # ---- 4. AND A DIRECTORY'S LINK ENDS IN A SLASH ----
+            #
+            # AND THE PARENT IS NOT ONE OF THEM.  MEASURED: the links
+            # are absolute, so the parent is "/../?token=..." and it
+            # ends in a slash too -- and picking it gave the root
+            # again.
+            _dir13 = [l for l in _links13
+                      if l.split("?")[0].endswith("/")
+                      and l.split("?")[0] not in ("/", "/..")
+                      and "/../" not in l
+                      and not l.startswith("../")]
+            check("and a directory's link ends in a slash",
+                  bool(_dir13), str(_links13)[:120])
+
+            # ---- 5. AND CLICKING ONE WORKS ----
+            _st13, _b13, _loc13 = _get13(_dir13[0])
+            check("and clicking a directory works",
+                  _st13 == 200 and b"inner.html" in _b13,
+                  f"{_st13} {_b13[:40]}")
+
+            # ---- 6. AND THE DEEPER ONE ----
+            _links13b = [x.decode() for x in
+                         _re13.findall(rb'href="([^"]+)"', _b13)]
+            _deep13 = [l for l in _links13b
+                       if l.split("?")[0].endswith("/")
+                       and l.split("?")[0] not in ("/", "/..")
+                       and "/../" not in l
+                       and not l.startswith("../")]
+            _st13, _b13, _loc13 = _get13(_deep13[0])
+            check("and clicking into the deeper directory works",
+                  _st13 == 200, f"{_st13} {_b13[:40]}")
+
+            # ---- 7. AND A PROGRAM WITH NO COOKIE JAR WORKS TOO ----
+            _st13, _b13, _loc13 = _get13(f"/?token={_tok13}",
+                                         _cookie=False, _html=False)
+            check("and a program with no cookie jar gets the page",
+                  _st13 == 200, str(_st13))
+            _plinks13 = [x.decode() for x in
+                         _re13.findall(rb'href="([^"]+)"', _b13)]
+            check("and its links carry the token too",
+                  any("token=" in l for l in _plinks13),
+                  str(_plinks13)[:120])
+            _st13, _b13, _loc13 = _get13(_plinks13[0],
+                                         _cookie=False, _html=False)
+            check("and it can follow one",
+                  _st13 == 200, f"{_st13} {_b13[:40]}")
+
+            # ---- 8. AND NO TOKEN AT ALL IS REFUSED ----
+            _st13, _b13, _loc13 = _get13("/", _cookie=False, _html=False)
+            check("and no token at all is still refused",
+                  _st13 == 401, str(_st13))
+
+            # ---- 9. AND THE BASIC AUTH HEADER ----
+            #
+            # **AND THIS IS THE ONE A PROGRAM USES.**
+            #
+            #     curl -u <the token>: http://<host>:<the port>/a/file
+            #     wget --user=<the token> --password= http://<host>:<the port>/a/file
+            #
+            # **AND THE HEADER IS COMPARED AGAINST THE TOKEN.**  MEASURED:
+            # it was only read and not compared, and
+            #
+            #     curl -u wrongtoken: http://<host>:<port>/a/file
+            #
+            # answered 200 and gave the file.  ANY header with ANY
+            # user name was let in.
+            import base64 as _b64_13
+
+            def _get_auth13(_path, _user):
+                _c13a = _hc5.HTTPConnection("127.0.0.1", _p13, timeout=10)
+                _hdr = _b64_13.b64encode(f"{_user}:".encode()).decode()
+                _c13a.request("GET", _path,
+                              headers={"Authorization": f"Basic {_hdr}"})
+                _r13a = _c13a.getresponse()
+                _b13a = _r13a.read()
+                _st13a = _r13a.status
+                _c13a.close()
+                return _st13a, _b13a
+
+            _st13, _b13 = _get_auth13("/readme.txt", _tok13)
+            check("and the basic auth header is let in",
+                  _st13 == 200 and b"A FILE" in _b13,
+                  f"{_st13} {_b13[:40]}")
+
+            _st13, _b13 = _get_auth13("/readme.txt", "wrongtoken")
+            check("and the WRONG basic auth header is refused",
+                  _st13 != 200, str(_st13))
+
+            _st13, _b13 = _get_auth13("/readme.txt", _tok13[:8])
+            check("and a prefix of the token is refused",
+                  _st13 != 200, str(_st13))
+
+            # AND A WRONG COOKIE IS REFUSED TOO.
+            _jar13["ljt_token"] = "wrongtoken"
+            _st13, _b13, _loc13 = _get13("/readme.txt")
+            check("and the WRONG cookie is refused",
+                  _st13 != 200, str(_st13))
+            _jar13["ljt_token"] = _tok13
+
+            # ---- 10. AND NO CREDENTIALS AT ALL IS A 401 ----
+            #
+            # **AND IT IS A 401 AND NOT A 404**, because a 401 says
+            # "not yet, and here is how" -- and `curl` and `wget` both
+            # know what to do with a `WWW-Authenticate`.
+            _c13b = _hc5.HTTPConnection("127.0.0.1", _p13, timeout=10)
+            _c13b.request("GET", "/readme.txt")
+            _r13b = _c13b.getresponse()
+            _r13b.read()
+            _st13b = _r13b.status
+            _wa13 = _r13b.getheader("WWW-Authenticate") or ""
+            _c13b.close()
+            check("and no credentials at all is a 401",
+                  _st13b == 401, str(_st13b))
+            check("and it says how to get in",
+                  "Basic" in _wa13, _wa13[:60])
+
+            # ---- 11. AND THE OLD PATH FORM STILL WORKS ----
+            _st13, _b13, _loc13 = _get13(f"/{_tok13}/readme.txt",
+                                         _cookie=False, _html=False)
+            check("and the old path form still works",
+                  _st13 == 200 and b"A FILE" in _b13,
+                  f"{_st13} {_b13[:40]}")
+        finally:
+            _srv13.shutdown()
 
     # ---- AND THE HTTP SERVER SAYS WHO IT IS ----
     #

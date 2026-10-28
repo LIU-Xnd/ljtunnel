@@ -322,7 +322,21 @@ def main(argv=None) -> int:
         log(f"  the http server is up on 127.0.0.1:{args.http_port}")
         log("")
         log("  the URL, once the tunnel is up:")
-        log(f"    http://{args.listen_host}:{ports[0]}/{http_token}/")
+        # AND THE TOKEN IS IN THE QUERY, AND NOT IN THE PATH.
+        #
+        # MEASURED: with the token in the PATH the server's own
+        # directory listing links to `subdirectory/`, and clicking one
+        # dropped the token -- so the next page said "no token".
+        #
+        # Now the token goes into a cookie on the first request, and
+        # the address bar is clean from then on.
+        log(f"    http://{args.listen_host}:{ports[0]}/?token={http_token}")
+        log("")
+        log("  and from a program:")
+        log(f"    curl -u {http_token}: "
+            f"http://{args.listen_host}:{ports[0]}/a/file")
+        log(f"    wget --user={http_token} --password= "
+            f"http://{args.listen_host}:{ports[0]}/a/file")
         log("")
     elif args.forward_only:
         # NOTHING IS STARTED HERE, AND THAT IS THE POINT.

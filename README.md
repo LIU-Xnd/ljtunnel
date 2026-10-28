@@ -183,15 +183,45 @@ ljtunnel dialer --listen-host <the reachable end> --user <its account> \
 token in the URL is what lets somebody in:
 
 ```
-http://<the reachable end>:<the forwarded port>/<the token>/
+http://<the reachable end>:<the forwarded port>/?token=<the token>
 ```
 
-**THE TOKEN IS THE FIRST SEGMENT OF THE PATH**, and it is not the file
-that is served: a request for `/<token>/some/file.html` serves
-`some/file.html`, and the token is only the gate.  So the token is not
-a file name that has to be in every link.
+**AND THE TOKEN IS A COOKIE AFTER THE FIRST TIME, AND THAT IS THE
+POINT.**  The first request carries the token in the query; the server
+answers with a redirect and a cookie, and from then on the address bar
+is clean and every link is a plain path.
 
-**AND IT IS COMPARED IN CONSTANT TIME**, so the time it takes does not
+**MEASURED, WHY IT WAS NOT LIKE THIS BEFORE:** the token was the first
+segment of the path, and the server's own directory listing links to
+`subdirectory/` -- so clicking one dropped the token and the next page
+said "no token".  A link that a person can click and that keeps
+working is worth more than a link that needs the secret pasted into it
+every time.
+
+**AND THE COOKIE IS HTTP-ONLY AND SAME-SITE**, so a page on another
+site cannot make the browser send it, and it does not go out in a
+referrer.
+
+**AND THE TOKEN IS STILL ACCEPTED IN THE PATH**, so a URL that was
+printed and bookmarked keeps working.
+
+**AND FROM A PROGRAM, THE TOKEN IS THE USER NAME.**  `curl` and
+`wget` both know how to send it, and neither of them keeps a cookie
+across a redirect:
+
+```bash
+curl -u <the token>: http://<the reachable end>:<the forwarded port>/a/file
+wget --user=<the token> --password= http://<the reachable end>:<the forwarded port>/a/file
+```
+
+**AND A REQUEST WITH NO CREDENTIALS AT ALL IS A 401**, with a
+`WWW-Authenticate` header -- and not a 404.  A 404 tells a program
+"there is nothing here"; a 401 says "not yet, and here is how", and
+both `curl` and `wget` know what to do with that.  A request that has
+a credential and the WRONG one is a 404, because a wrong token does
+not become right by trying again.
+
+**AND THE TOKEN IS COMPARED IN CONSTANT TIME**, so the time it takes does not
 say how much of it was guessed right.
 
 **AND THE TOKEN IS KEPT**, in the state directory, so the URL does not
