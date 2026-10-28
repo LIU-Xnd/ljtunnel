@@ -196,15 +196,13 @@ print("  the key is in the list")
     # THE FORWARDED PORT IS NAMED, because this test's listener admits
     # ONE port and the dialer would otherwise start at 10002 and walk
     # up past it.
-    # THE SERVER ALLOWS WRITING, and it uses the token TABLE -- so
-    # the token the test uses has to be in the table, and it is put
-    # there first.
+    # THE SERVER SERVES AND NOTHING ELSE, and the token is the one the
+    # test uses.
     out = frun(c, f"{binary} dialer --listen-host {this_host} "
                   f"--listen-port {LISTEN_PORT} --forward-port {FWD_PORT} "
                   f"--user {this_user} --name thewebbox "
                   f"--http-server --http-directory {tmpdir} "
                   f"--http-port {http_port} --http-token THETOKEN "
-                  f"--http-allow-edit "
                   f"--accept-new-host-key > {tmpdir}/dialer.log 2>&1 &")
     time.sleep(12)
     out = frun(c, f"cat {tmpdir}/dialer.log 2>&1 | head -30")
@@ -246,51 +244,18 @@ print("  the key is in the list")
               f"{type(e).__name__}: {e}")
 
     print()
-    print("=== the writing goes through the tunnel ===")
+    print()
+    print("=== and the server does not write ===")
     try:
         cc = http.client.HTTPConnection("127.0.0.1", FWD_PORT, timeout=15)
         cc.request("PUT", "/THETOKEN/uploaded.txt", body=b"UPLOADED")
         rr = cc.getresponse()
         rr.read()
         cc.close()
-        check("a file can be uploaded through the tunnel",
-              rr.status in (201, 204), str(rr.status))
+        check("and an upload is refused",
+              rr.status == 405, str(rr.status))
     except Exception as e:
-        check("a file can be uploaded through the tunnel", False,
-              f"{type(e).__name__}: {e}")
-
-    out = frun(c, f"cat {tmpdir}/uploaded.txt 2>&1")
-    check("and it arrived on the far side",
-          "UPLOADED" in out, out.strip()[:60])
-
-    try:
-        cc = http.client.HTTPConnection("127.0.0.1", FWD_PORT, timeout=15)
-        cc.request("GET", "/THETOKEN/uploaded.txt")
-        rr = cc.getresponse()
-        body = rr.read()
-        cc.close()
-        check("and it can be read back",
-              rr.status == 200 and b"UPLOADED" in body,
-              f"{rr.status} {body[:40]}")
-    except Exception as e:
-        check("and it can be read back", False, f"{type(e).__name__}: {e}")
-
-    try:
-        cc = http.client.HTTPConnection("127.0.0.1", FWD_PORT, timeout=15)
-        cc.request("DELETE", "/THETOKEN/uploaded.txt")
-        rr = cc.getresponse()
-        rr.read()
-        cc.close()
-        check("and it can be deleted with the token that put it there",
-              rr.status == 204, str(rr.status))
-    except Exception as e:
-        check("and it can be deleted with the token that put it there", False,
-              f"{type(e).__name__}: {e}")
-
-    out = frun(c, f"ls {tmpdir}/uploaded.txt 2>&1")
-    check("and it is gone on the far side",
-          "No such file" in out or "not found" in out.lower(),
-          out.strip()[:60])
+        check("and an upload is refused", False, f"{type(e).__name__}: {e}")
 
     print()
     print("=== the reachable end's panel NAMES the dialer ===")

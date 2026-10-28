@@ -204,64 +204,19 @@ one by hand; without it a random one is made the first time.
 | `--http-directory` | what to serve |
 | `--http-port` | where to listen (default 10001) |
 | `--http-token` | the token, if you want a particular one |
-| `--http-allow-edit` | let the people who reach it upload and delete |
 
-## The tokens are a table, and there are ten of them
+**IT SERVES AND NOTHING ELSE.**  There is no upload, no delete and no
+directory making -- the server answers GET and HEAD and refuses the
+rest.  A file server that writes is a different program with a
+different set of rules about who may write what, and there is one
+that does that (`rclone serve webdav`), and this is not it.
 
-**ONE TOKEN IS ONE PERSON**, and one person cannot share a machine with
-anybody else without giving them everything.  So there is a TABLE:
-
-```
-~/.local/state/ljtunnel-http-token/token-filetable
-```
-
-**AND IT IS PRIVATE** -- the directory is `0700` and the file is
-`0600`, so a token is not readable by anybody else on the machine.
-It is a text file, one token per line, and a line that starts with a
-`#` is a comment.
-
-**TEN BY DEFAULT**, and more with:
+**AND IF YOU WANT TO WRITE THROUGH THE TUNNEL**, run `rclone serve
+webdav` on the far side and forward its port instead:
 
 ```bash
-ljtunnel dialer expand-tokens 5
+rclone serve webdav /path/to/serve --addr 127.0.0.1:10001
 ```
-
-which adds five and says how many there are now.
-
-### The three rules
-
-| | what it needs |
-|---|---|
-| **DOWNLOAD** a file | ANY token in the table |
-| **UPLOAD** a file | any token in the table |
-| **DELETE** a file | **the token that uploaded it** |
-
-**THE DELETE RULE IS THE ONE THAT MATTERS.**  Everybody who has a
-token can put a file in, and everybody who has a token can take a
-file out -- but only the person whose token put it there can take
-**it** out.  So a person cannot delete somebody else's work by
-guessing a name.
-
-**AND EVERY FILE REMEMBERS WHO PUT IT THERE**, in a small record next
-to the server's own state -- not in the served directory, because a
-file in there is a file the people can read, and an owner record is
-not theirs to read.  The record is named with a hash of the path, so
-it cannot be walked and it does not say what the file is called.
-
-**WITHOUT `--http-allow-edit` THE SERVER ONLY SERVES.**  The token
-still has to be there -- a download needs a token too -- but nothing
-can be changed.
-
-**THE REACHABLE END NAMES IT LIKE ANY OTHER DIALER.**  There is no host
-key behind an http server, so the keyscan finds nothing -- and the
-server says who it is in a header instead:
-
-    X-LJT-Name: box-a
-    X-LJT-Fingerprint: SHA256:...
-
-The fingerprint is of the MACHINE KEY -- the key the dialer logged in
-with -- so the reachable end looks the name up in its own key list, and
-a dialer cannot call itself something it is not.
 
 ## The stale host keys
 

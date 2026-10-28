@@ -71,7 +71,7 @@ import subprocess
 import sys
 import time
 
-from . import detect, httpsrv, httptokens, listen, paths, sshd
+from . import detect, httpsrv, listen, paths, sshd
 from . import quiet
 
 
@@ -122,10 +122,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--http-token", default=None, metavar="TOKEN",
                    help="the token the http URL must carry (default: one "
                         "from the table, which is made if it is not there)")
-    p.add_argument("--http-allow-edit", action="store_true",
-                   help="let the people who reach the http server upload, "
-                        "delete and make directories in it. Without it the "
-                        "server only serves what is there")
     p.add_argument("--print-only", action="store_true",
                    help="print what this would do and exit")
     return p
@@ -138,17 +134,6 @@ def current_user() -> str:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-
-    # ---- THE TOKEN TABLE'S OWN COMMANDS ----
-    #
-    # THEY ARE HERE AND NOT IN THE DISPATCHER, because they are about
-    # the DIALER's table and not about a tunnel.
-    #
-    #     ljtunnel dialer expand-tokens 5
-    #
-    # adds five tokens and says how many there are now.
-    if argv and argv[0] == "expand-tokens":
-        return _expand_tokens(argv[1:])
 
     args = build_parser().parse_args(argv)
 
@@ -179,14 +164,9 @@ def main(argv=None) -> int:
         #
         # A token that changes on every run is a URL that works today
         # and not tomorrow.
-        http_token = (args.http_token or "").strip()
-        # THE TABLE IS THE THING, and the tokens in it are the keys to
-        # the door.  A token given by hand is ADDED to it, so that the
-        # one the person is told about is in the table too.
-        if http_token:
-            _add_token(http_token)
-        else:
-            http_token = _ensure_http_tokens()[0]
+        # THE TOKEN IS ONE, and it is kept in the state directory, so
+        # the URL does not change every time the dialer restarts.
+        http_token = (args.http_token or "").strip() or _read_or_make_http_token()
 
     log("")
     log("  ljtunnel dialer -- the unreachable end")
@@ -255,13 +235,7 @@ def main(argv=None) -> int:
         log(f"    serving: {os.path.abspath(args.http_directory)}")
         log(f"    on port: {args.http_port}")
         log(f"    the token: {http_token}")
-        log(f"    the table: {httptokens.table_path()}")
-        log(f"    the tokens: {len(httptokens.read_tokens())}")
-        if args.http_allow_edit:
-            log("    READ AND WRITE: people who reach it can upload,")
-            log("    delete and make directories in it.")
-        else:
-            log("    READ ONLY: people who reach it can only look.")
+        log("    READ ONLY: it serves files and nothing else.")
         log("")
     else:
         # The key list this end's sshd accepts: the end user's key.
@@ -305,8 +279,7 @@ def main(argv=None) -> int:
             http_srv, http_token = httpsrv.serve(
                 args.http_directory, args.http_port, http_token,
                 name=name, fingerprint=_fp,
-                allow_edit=args.http_allow_edit,
-                tokens=httptokens.read_tokens())
+                )
         except OSError as e:
             log(f"  the http server did not start: {e}")
             return 1
@@ -505,78 +478,6 @@ def _fingerprint_of_key(key: str) -> str:
         return ""
     parts = (r.stdout or "").strip().split()
     return parts[1] if len(parts) >= 2 else ""
-
-
-def _expand_tokens(argv: list) -> int:
-    """Add more tokens to the table, and say how many there are.
-
-    **THE EXISTING TOKENS STAY.**  A token that somebody has is a
-    token they are using, and taking it away would break whatever
-    they are doing with it.
-
-    **AND THE NEW ONES ARE PRINTED**, because a person has to know
-    them and there is nowhere else to read them from.
-    """
-    n = 0
-    for a in argv:
-        if a.startswith("-"):
-            continue
-        try:
-            n = int(a)
-        except ValueError:
-            log(f"  {a} is not a number")
-            return 2
-        break
-    if n < 1:
-        # AND NO NUMBER IS NOT "ADD ONE".  MEASURED: it was, and
-        # `expand-tokens` with no argument quietly made a token that
-        # nobody asked for.
-        log("  how many? a number, one or more")
-        log("")
-        log("  ljtunnel dialer expand-tokens 5")
-        return 2
-
-    before = httptokens.read_tokens()
-    if not before:
-        # THE TABLE IS NOT THERE YET, SO IT IS MADE FIRST -- with the
-        # ten it normally has -- and THEN the extra ones are added.
-        #
-        # MEASURED: it was made with only the new ones, so the first
-        # `expand-tokens 3` left a table of three, and the ten that
-        # are supposed to be there were not.
-        before = httptokens.ensure_table()
-        log("")
-        log(f"  the table was not there, so it was made with {len(before)}")
-        # AND IT IS WRITTEN DOWN NOW, so the tokens that are added
-        # after it do not take its place.
-        httptokens.write_tokens(before)
-    after = httptokens.expand(n)
-    log("")
-    log(f"  the token table: {httptokens.table_path()}")
-    log(f"  there were {len(before)} and there are {len(after)} now")
-    log("")
-    log("  the new ones:")
-    for t in after[len(before):]:
-        log(f"    {t}")
-    log("")
-    return 0
-
-
-def _ensure_http_tokens() -> list:
-    """The http server's tokens: the table, made if it is not there.
-
-    **TEN BY DEFAULT**, and the table is PRIVATE -- it holds the keys
-    to the web server, so nobody else on the machine can read it.
-    """
-    return httptokens.ensure_table()
-
-
-def _add_token(token: str) -> None:
-    """Put a token in the table, if it is not there already."""
-    tokens = httptokens.read_tokens()
-    if token not in tokens:
-        tokens.append(token)
-        httptokens.write_tokens(tokens)
 
 
 def _read_or_make_http_token() -> str:
