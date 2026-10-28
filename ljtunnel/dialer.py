@@ -115,8 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def current_user() -> str:
-    return os.environ.get("USERNAME") or os.environ.get("USER") or ""
-
+    """The account this end runs as."""
+    from . import paths
+    return paths.current_user()
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)

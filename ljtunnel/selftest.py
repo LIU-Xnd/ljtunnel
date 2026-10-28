@@ -1683,6 +1683,36 @@ def test_host_key_change():
         finally:
             paths.state_dir = _old3
 
+    # ---- AND THE ACCOUNT IS FOUND WITHOUT THE ENVIRONMENT ----
+    #
+    # THE FROZEN BINARY IS RUN WITH `env -i`, which clears the
+    # environment, and then USERNAME and USER are both gone.
+    #
+    # MEASURED: the dialer said "cannot tell who the user is; pass
+    # --local-user" and did not start at all.  And `getpass.getuser()`
+    # fails with "No module named 'pwd'" -- it is a Unix module.
+    #
+    # THE HOME PATH IS THERE, and its last part is the account's
+    # name: /home/liuxd -> liuxd.
+    import os as _os3
+
+    _saved_env = {}
+    for _k in ("USERNAME", "USER", "HOME", "USERPROFILE"):
+        _saved_env[_k] = _os3.environ.pop(_k, None)
+    try:
+        check("and the account is not found with nothing at all",
+              paths.current_user() == "", repr(paths.current_user()))
+        _os3.environ["HOME"] = "/home/liuxd"
+        check("but it is found from the home path",
+              paths.current_user() == "liuxd",
+              repr(paths.current_user()))
+    finally:
+        for _k, _v in _saved_env.items():
+            if _v is not None:
+                _os3.environ[_k] = _v
+            else:
+                _os3.environ.pop(_k, None)
+
     # ---- AND THE START DOES NOT ASK FOR ADMINISTRATOR RIGHTS ----
     #
     # THE UAC PROMPT IS ON THE SECURE DESKTOP, and it sits there

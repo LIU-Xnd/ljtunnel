@@ -626,7 +626,8 @@ def dialer_command(user: str = "", host: str = "") -> str:
 
 
 def current_user() -> str:
-    return os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    """The account this end runs as."""
+    return paths.current_user()
 
 
 def main(argv=None) -> int:

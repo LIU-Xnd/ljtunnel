@@ -31,6 +31,55 @@ def state_dir() -> str:
     return os.path.join(base, APP_NAME)
 
 
+def current_user() -> str:
+    """The account this end runs as.
+
+    **THE ENVIRONMENT IS NOT ALWAYS THERE.**  MEASURED: the frozen
+    binary is run with `env -i`, which clears the environment, and
+    then USERNAME and USER are both gone and the dialer said
+
+        cannot tell who the user is; pass --local-user
+
+    and did not start at all.  So the account is asked of the SYSTEM
+    when the environment does not say.
+    """
+    who = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    if who:
+        return who
+
+    # ---- THE HOME PATH'S NAME ----
+    #
+    # MEASURED: `env -i HOME=/home/liuxd` has no USERNAME and no
+    # USER, and `getpass.getuser()` fails with "No module named
+    # 'pwd'" -- it is a Unix module.  But the HOME PATH IS THERE, and
+    # its last part is the account's name:
+    #
+    #     /home/liuxd   ->   liuxd
+    #
+    # So that is where the answer comes from when the environment
+    # does not say.
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
+    if home:
+        who = os.path.basename(home.rstrip("\\/"))
+        if who:
+            return who
+
+    # ---- and the system, as a last resort ----
+    try:
+        import getpass
+        who = getpass.getuser()
+    except Exception:
+        pass
+    if who:
+        return who
+    try:
+        import pwd
+        who = pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        pass
+    return who
+
+
 def ensure_dir(path: str) -> str:
     """Make the directory, and its permissions as tight as they go.
 
